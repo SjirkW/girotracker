@@ -28,6 +28,11 @@ yarn-error.log*
 # server runtime
 server/data/*.db
 server/data/*.db-journal
+server/data/*.db-shm
+server/data/*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 
 # cache
 .npm/
@@ -35,5 +40,6 @@ server/data/*.db-journal
 
 # wrangler files
 .wrangler
+**/.wrangler/
 .dev.vars*
 !.dev.vars.example
