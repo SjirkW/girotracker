@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import {
   CartesianGrid,
   Line,
@@ -67,10 +67,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
 
   const isDraggingRef = useRef(false);
   const dragStartXRef = useRef<number | null>(null);
-
-  // Boolean state — flipped only on mouseup, so React renders just once
-  // after the entire drag (to show the ✕ button).
-  const [hasSelection, setHasSelection] = useState(false);
+  const hasRectRef = useRef(false);
 
   const chartData = useMemo(() => decimate(data), [data]);
 
@@ -93,7 +90,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
   const clearSelection = () => {
     if (dragRectRef.current) dragRectRef.current.style.opacity = "0";
     if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
-    setHasSelection(false);
+    hasRectRef.current = false;
   };
 
   useEffect(() => {
@@ -211,15 +208,14 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       isDraggingRef.current = true;
       dragStartXRef.current = snappedX;
       hideHover();
-      // Reset visuals
+      // Reset visuals — start with the rectangle hidden (zero width).
       if (dragRectRef.current) {
         dragRectRef.current.style.transform = `translate3d(${snappedX}px, 0, 0)`;
         dragRectRef.current.style.width = "0px";
         dragRectRef.current.style.opacity = "0";
       }
       if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
-      // If a previous selection was committed, drop the close button.
-      if (hasSelection) setHasSelection(false);
+      hasRectRef.current = false;
       e.preventDefault();
     };
 
@@ -240,11 +236,14 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       isDraggingRef.current = false;
       const w = dragRectRef.current?.offsetWidth ?? 0;
       if (w < 2) {
-        // Click without drag — clear.
+        // Click without drag — clear any prior selection.
         clearSelection();
-      } else {
-        setHasSelection(true);
+        return;
       }
+      // Drag finished: keep the rectangle as a visual indicator, but hide the
+      // floating label so it stops colliding with the hover tooltip.
+      hasRectRef.current = true;
+      if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
     };
 
     // Listen on window for move/up so the drag survives the cursor leaving
@@ -284,17 +283,6 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
         <span ref={dragLabelDateRef} className="text-muted-foreground" />
         <span ref={dragLabelDeltaRef} />
       </div>
-      {hasSelection && (
-        <button
-          onClick={clearSelection}
-          className="absolute top-2.5 z-20 text-muted-foreground hover:text-foreground text-xs"
-          style={{ left: "calc(50% + 110px)" }}
-          title="Clear selection"
-        >
-          ✕
-        </button>
-      )}
-
       {/* Hover cursor — never re-renders. */}
       <div
         ref={cursorRef}
