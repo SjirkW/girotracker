@@ -119,19 +119,19 @@ const SortableTh = ({
   children: ReactNode;
 }) => {
   const active = sort.key === sortKey;
-  const arrow = !active ? "" : sort.dir === "desc" ? "↓" : "↑";
+  const arrow = sort.dir === "desc" ? "↓" : "↑";
   return (
     <TableHead className={align === "right" ? "text-right" : ""}>
       <button
         type="button"
         onClick={() => onToggle(sortKey)}
         className={
-          "inline-flex items-center gap-1 transition-colors " +
+          "inline-flex items-center gap-0.5 transition-colors " +
           (active ? "text-foreground" : "hover:text-foreground")
         }
       >
         {children}
-        <span className="text-xs opacity-70 w-3 inline-block text-left">{arrow}</span>
+        {active && <span className="text-xs opacity-70">{arrow}</span>}
       </button>
     </TableHead>
   );
@@ -503,7 +503,7 @@ function App() {
 
         <header className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight">Girotracker</h1>
+            <h1 className="text-3xl font-semibold tracking-tight">GIROTRACKER</h1>
             <p className="text-muted-foreground text-sm">
               DEGIRO portfolio value over time
             </p>
@@ -640,8 +640,8 @@ function App() {
         )}
 
         {valuation.length > 0 && latest && (
-          <Card className="px-2 sm:px-6">
-            <CardHeader className="flex flex-row items-center justify-between gap-3 px-0">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-3">
               <CardTitle className="flex items-center gap-2 min-w-0">
                 <span className="truncate">
                   {selectedIsin
@@ -686,7 +686,7 @@ function App() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4 px-0">
+            <CardContent className="space-y-4">
               <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
                   <div className="text-sm text-muted-foreground">
@@ -769,7 +769,7 @@ function App() {
 
         {transactions.length > 0 && (
           <Card>
-            <CardContent className="pt-6">
+            <CardContent>
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <div className="flex items-center justify-between gap-3">
                   <TabsList>
@@ -785,31 +785,45 @@ function App() {
                   </TabsList>
                   {/* Inline filter on viewports wide enough to fit it next to the
                       tabs; on narrower screens, each tab's content shows its
-                      own filter input below. */}
-                  <Input
-                    type="search"
-                    placeholder={
-                      activeTab === "tickers"
-                        ? "Filter by ISIN, name, ticker or exchange…"
-                        : activeTab === "transactions"
-                          ? "Filter by date, product, ISIN or currency…"
-                          : "Filter by name, ticker or ISIN…"
-                    }
-                    value={
-                      activeTab === "tickers"
-                        ? tickersQuery
-                        : activeTab === "transactions"
-                          ? txQuery
-                          : holdingsQuery
-                    }
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (activeTab === "tickers") setTickersQuery(v);
-                      else if (activeTab === "transactions") setTxQuery(v);
-                      else setHoldingsQuery(v);
-                    }}
-                    className="hidden md:block max-w-xs"
-                  />
+                      own filter input below. The eye sits left of the search
+                      on desktop; on mobile (search hidden) it lands at the
+                      right end via the parent's justify-between. */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setPrivacy((p) => !p)}
+                      title={privacy ? "Show values" : "Hide values"}
+                      aria-label={privacy ? "Show values" : "Hide values"}
+                      className="shrink-0"
+                    >
+                      {privacy ? <EyeOff /> : <Eye />}
+                    </Button>
+                    <Input
+                      type="search"
+                      placeholder={
+                        activeTab === "tickers"
+                          ? "Filter by ISIN, name, ticker or exchange…"
+                          : activeTab === "transactions"
+                            ? "Filter by date, product, ISIN or currency…"
+                            : "Filter by name, ticker or ISIN…"
+                      }
+                      value={
+                        activeTab === "tickers"
+                          ? tickersQuery
+                          : activeTab === "transactions"
+                            ? txQuery
+                            : holdingsQuery
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (activeTab === "tickers") setTickersQuery(v);
+                        else if (activeTab === "transactions") setTxQuery(v);
+                        else setHoldingsQuery(v);
+                      }}
+                      className="hidden md:block max-w-xs"
+                    />
+                  </div>
                 </div>
 
                 <TabsContent value="holdings" className="mt-4 space-y-3">
@@ -825,52 +839,41 @@ function App() {
                           placeholder="Filter by name, ticker or ISIN…"
                           value={holdingsQuery}
                           onChange={(e) => setHoldingsQuery(e.target.value)}
-                          className="max-w-xs md:hidden"
+                          className="md:hidden"
                         />
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={() => setPrivacy((p) => !p)}
-                            title={privacy ? "Show values" : "Hide values"}
-                            aria-label={privacy ? "Show values" : "Hide values"}
-                          >
-                            {privacy ? <EyeOff /> : <Eye />}
-                          </Button>
-                          <RangeSelector
-                            value={range}
-                            onChange={setRange}
-                            customRange={customRange}
-                            onCustomChange={setCustomRange}
-                            earliestDate={earliestDate}
-                            latestDate={latest?.date ?? today()}
-                          />
-                        </div>
+                        <RangeSelector
+                          value={range}
+                          onChange={setRange}
+                          customRange={customRange}
+                          onCustomChange={setCustomRange}
+                          earliestDate={earliestDate}
+                          latestDate={latest?.date ?? today()}
+                        />
                       </div>
                       <div className="overflow-x-auto">
-                        <Table>
+                        <Table className="text-[13px]">
                           <TableHeader>
                             <TableRow>
                               <SortableTh sortKey="product" sort={sort} onToggle={toggleSort}>
                                 Stock
                               </SortableTh>
-                              <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
-                                Ticker
-                              </SortableTh>
-                              <SortableTh sortKey="quantity" sort={sort} onToggle={toggleSort} align="right">
-                                Qty
-                              </SortableTh>
                               <SortableTh sortKey="valueEur" sort={sort} onToggle={toggleSort} align="right">
                                 Value
-                              </SortableTh>
-                              <SortableTh sortKey="investedEur" sort={sort} onToggle={toggleSort} align="right">
-                                Invested
                               </SortableTh>
                               <SortableTh sortKey="returnEur" sort={sort} onToggle={toggleSort} align="right">
                                 Return
                               </SortableTh>
                               <SortableTh sortKey="returnPct" sort={sort} onToggle={toggleSort} align="right">
                                 Return %
+                              </SortableTh>
+                              <SortableTh sortKey="investedEur" sort={sort} onToggle={toggleSort} align="right">
+                                Invested
+                              </SortableTh>
+                              <SortableTh sortKey="quantity" sort={sort} onToggle={toggleSort} align="right">
+                                Qty
+                              </SortableTh>
+                              <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
+                                Ticker
                               </SortableTh>
                             </TableRow>
                           </TableHeader>
@@ -889,22 +892,13 @@ function App() {
                                 }
                               >
                                 <TableCell
-                                  className="max-w-[280px] truncate"
+                                  className="max-w-[140px] sm:max-w-[280px] truncate"
                                   title={h.product}
                                 >
                                   {h.product}
                                 </TableCell>
-                                <TableCell className="font-mono text-xs">
-                                  {h.ticker ?? "—"}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
-                                </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                   {privacy ? "•••" : fmtEur(h.valueEur)}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums text-muted-foreground">
-                                  {privacy ? "•••" : fmtEur(h.investedEur)}
                                 </TableCell>
                                 <TableCell
                                   className={
@@ -933,6 +927,15 @@ function App() {
                                   })}
                                   %
                                 </TableCell>
+                                <TableCell className="text-right tabular-nums text-muted-foreground">
+                                  {privacy ? "•••" : fmtEur(h.investedEur)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
+                                </TableCell>
+                                <TableCell className="font-mono text-xs">
+                                  {h.ticker ?? "—"}
+                                </TableCell>
                               </TableRow>
                             ))}
                           </TableBody>
@@ -954,7 +957,7 @@ function App() {
                         placeholder="Filter by ISIN, name, ticker or exchange…"
                         value={tickersQuery}
                         onChange={(e) => setTickersQuery(e.target.value)}
-                        className="max-w-xs md:hidden"
+                        className="md:hidden"
                       />
                       {unresolved.length > 0 && (
                         <p className="text-sm text-destructive">
@@ -1007,7 +1010,7 @@ function App() {
                     placeholder="Filter by date, product, ISIN or currency…"
                     value={txQuery}
                     onChange={(e) => setTxQuery(e.target.value)}
-                    className="max-w-xs md:hidden"
+                    className="md:hidden"
                   />
                   <div className="overflow-x-auto">
                     <Table>

@@ -1,4 +1,6 @@
-# girotracker
+# GIROTRACKER
+
+**Live app: <https://tracker.girotools.workers.dev/>**
 
 A web app that visualises a DEGIRO portfolio's value and returns over time, using the broker's Transactions CSV export plus Yahoo Finance prices.
 
