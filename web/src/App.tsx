@@ -23,6 +23,7 @@ import { fetchPrices, resolveTickers, type TickerLookupResult } from "@/lib/api"
 import { parseDegiroCsv, type Transaction } from "@/lib/parseCsv";
 import {
   buildDailyHoldings,
+  buildDailyInvested,
   computeValuation,
   enumerateDates,
   forwardFillDaily,
@@ -68,6 +69,34 @@ async function pMapLimit<T, R>(
   return results;
 }
 
+const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as const;
+type Range = (typeof RANGES)[number];
+
+const MODES = [
+  { id: "return", label: "Return" },
+  { id: "value", label: "Value" },
+] as const;
+type Mode = (typeof MODES)[number]["id"];
+
+const rangeStartDate = (range: Range, latest: string, earliest: string): string => {
+  const d = new Date(`${latest}T00:00:00Z`);
+  const apply = (fn: (x: Date) => void) => {
+    const c = new Date(d);
+    fn(c);
+    return c.toISOString().slice(0, 10);
+  };
+  switch (range) {
+    case "1D": return apply((c) => c.setUTCDate(c.getUTCDate() - 1));
+    case "5D": return apply((c) => c.setUTCDate(c.getUTCDate() - 5));
+    case "1M": return apply((c) => c.setUTCMonth(c.getUTCMonth() - 1));
+    case "6M": return apply((c) => c.setUTCMonth(c.getUTCMonth() - 6));
+    case "YTD": return `${d.getUTCFullYear()}-01-01`;
+    case "1Y": return apply((c) => c.setUTCFullYear(c.getUTCFullYear() - 1));
+    case "5Y": return apply((c) => c.setUTCFullYear(c.getUTCFullYear() - 5));
+    case "MAX": return earliest;
+  }
+};
+
 type ComputeStatus =
   | { phase: "idle" }
   | { phase: "tickers" }
@@ -84,6 +113,8 @@ function App() {
   const [tickers, setTickers] = useState<TickerLookupResult[]>([]);
   const [valuation, setValuation] = useState<ValuationDay[]>([]);
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
+  const [range, setRange] = useState<Range>("MAX");
+  const [mode, setMode] = useState<Mode>("return");
 
   const handleFile = async (file: File) => {
     const text = await file.text();
@@ -199,21 +230,58 @@ function App() {
   };
 
   const latest = valuation.length > 0 ? valuation[valuation.length - 1] : null;
-  const peak = valuation.reduce(
-    (acc, d) => (d.totalEur > acc ? d.totalEur : acc),
-    0,
-  );
+  const earliestDate = valuation.length > 0 ? valuation[0].date : "";
 
   const unresolved = tickers.filter((t) => !t.ticker);
 
-  const chartData = useMemo(
-    () =>
-      valuation.map((d) => ({
-        date: d.date,
-        value: Math.round(d.totalEur),
-      })),
-    [valuation],
+  const investedByDate = useMemo(() => {
+    if (valuation.length === 0) return new Map<string, number>();
+    return buildDailyInvested(
+      transactions,
+      valuation.map((v) => v.date),
+    );
+  }, [transactions, valuation]);
+
+  const valueForDay = useMemo(
+    () => (d: ValuationDay) => {
+      if (mode === "value") return d.totalEur;
+      const invested = investedByDate.get(d.date) ?? 0;
+      return d.totalEur - invested;
+    },
+    [mode, investedByDate],
   );
+
+  const rangeStart = useMemo(
+    () => (latest ? rangeStartDate(range, latest.date, earliestDate) : ""),
+    [range, latest, earliestDate],
+  );
+
+  const rangeData = useMemo(
+    () =>
+      valuation
+        .filter((d) => d.date >= rangeStart)
+        .map((d) => ({ date: d.date, value: Math.round(valueForDay(d)) })),
+    [valuation, rangeStart, valueForDay],
+  );
+
+  const rangeChange = useMemo(() => {
+    if (rangeData.length < 2) return null;
+    const start = rangeData[0].value;
+    const end = rangeData[rangeData.length - 1].value;
+    const abs = end - start;
+    // For Return mode the start can be near zero, which makes a % off start
+    // misleading. Anchor the % to the capital deployed at the end of the
+    // window instead — answers "what's the return on capital actually at
+    // work right now?".
+    const denom =
+      mode === "value"
+        ? start
+        : (investedByDate.get(rangeData[rangeData.length - 1].date) ?? 0);
+    const pct = denom !== 0 ? abs / Math.abs(denom) : 0;
+    return { abs, pct, start, end };
+  }, [rangeData, mode, investedByDate]);
+
+  const headlineValue = latest ? valueForDay(latest) : 0;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -321,27 +389,88 @@ function App() {
               <CardTitle>Portfolio value over time</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+              <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
-                  <dt className="text-muted-foreground">Latest ({latest.date})</dt>
-                  <dd className="text-2xl font-semibold tabular-nums">
-                    {fmtEur(latest.totalEur)}
-                  </dd>
+                  <div className="text-sm text-muted-foreground">
+                    {mode === "return" ? "Total return" : "Portfolio value"} (
+                    {latest.date})
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <span
+                      className={
+                        "text-3xl font-semibold tabular-nums " +
+                        (mode === "return"
+                          ? headlineValue >= 0
+                            ? "text-emerald-500"
+                            : "text-red-500"
+                          : "")
+                      }
+                    >
+                      {mode === "return" && headlineValue >= 0 ? "+" : ""}
+                      {fmtEur(headlineValue)}
+                    </span>
+                    {rangeChange && (
+                      <span
+                        className={
+                          "text-base tabular-nums " +
+                          (rangeChange.abs >= 0 ? "text-emerald-500" : "text-red-500")
+                        }
+                      >
+                        {rangeChange.abs >= 0 ? "+" : ""}
+                        {fmtEur(rangeChange.abs)} ({rangeChange.abs >= 0 ? "+" : ""}
+                        {(rangeChange.pct * 100).toLocaleString("nl-NL", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                        %)
+                      </span>
+                    )}
+                  </div>
+                  {mode === "return" && latest && (
+                    <div className="text-xs text-muted-foreground mt-1 tabular-nums">
+                      Capital invested: {fmtEur(investedByDate.get(latest.date) ?? 0)} ·
+                      Market value: {fmtEur(latest.totalEur)}
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <dt className="text-muted-foreground">All-time peak</dt>
-                  <dd className="text-2xl font-semibold tabular-nums">{fmtEur(peak)}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Days</dt>
-                  <dd className="text-2xl font-semibold tabular-nums">
-                    {valuation.length}
-                  </dd>
+                <div className="flex flex-col items-end gap-3">
+                  <div className="inline-flex items-center rounded-lg border bg-muted/40 p-1">
+                    {MODES.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => setMode(m.id)}
+                        className={
+                          "px-4 py-1.5 rounded-md text-sm font-medium transition-colors " +
+                          (mode === m.id
+                            ? "bg-background text-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground")
+                        }
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {RANGES.map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setRange(r)}
+                        className={
+                          "px-3 py-1.5 rounded-md text-sm font-medium transition-colors " +
+                          (range === r
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+                        }
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="h-[420px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+                  <LineChart data={rangeData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
                     <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
                     <XAxis
                       dataKey="date"

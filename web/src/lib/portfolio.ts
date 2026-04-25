@@ -90,6 +90,33 @@ export const buildDailyHoldings = (
 };
 
 /**
+ * Cumulative net capital deployed into the portfolio per day. Buys (negative
+ * `totalEur`) increase deployed capital; sells (positive `totalEur`) reduce
+ * it. So "invested(t) = − Σ totalEur for transactions on or before t".
+ *
+ * This is *net* cash put in: sell proceeds reduce it, even if not withdrawn
+ * — for return calculations that's the right denominator since proceeds are
+ * sitting in cash and not exposed to market risk.
+ */
+export const buildDailyInvested = (
+  txs: Transaction[],
+  dates: string[],
+): Map<string, number> => {
+  const deltasByDate = new Map<string, number>();
+  for (const t of txs) {
+    deltasByDate.set(t.date, (deltasByDate.get(t.date) ?? 0) - t.totalEur);
+  }
+  const out = new Map<string, number>();
+  let running = 0;
+  for (const d of dates) {
+    const delta = deltasByDate.get(d);
+    if (delta != null) running += delta;
+    out.set(d, running);
+  }
+  return out;
+};
+
+/**
  * Yahoo only returns trading-day rows. For valuation on non-trading days, we
  * carry the most-recent close forward across the full date range.
  */
