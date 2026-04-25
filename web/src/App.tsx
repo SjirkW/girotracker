@@ -588,8 +588,9 @@ function App() {
                   <span className="font-medium text-primary">Click to upload</span> or
                   drag and drop a CSV
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  DEGIRO Transactions export
+                <p className="text-xs text-muted-foreground text-center">
+                  In DEGIRO: <span className="font-medium">Inbox → Activity → Transactions</span>,
+                  pick the full date range, then <span className="font-medium">Export → CSV</span>.
                 </p>
               </div>
               {fileName && (
