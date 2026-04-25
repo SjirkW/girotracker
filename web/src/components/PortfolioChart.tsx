@@ -87,12 +87,6 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
     if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
   };
 
-  const clearSelection = () => {
-    if (dragRectRef.current) dragRectRef.current.style.opacity = "0";
-    if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
-    hasRectRef.current = false;
-  };
-
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -207,9 +201,13 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       if (x < plotLeft || x > plotRight) return;
       const idx = xToIdx(x, plotLeft, plotWidth);
       const snappedX = idxToX(idx, plotLeft, plotWidth);
+      // Show the hover tooltip at the press position FIRST (before flipping
+      // the drag flag, since showHover bails out while dragging). A tap with
+      // no drag will leave this visible; a real drag will hide it on the
+      // first significant pointermove.
+      showHover(e);
       isDraggingRef.current = true;
       dragStartXRef.current = snappedX;
-      hideHover();
       if (dragRectRef.current) {
         dragRectRef.current.style.transform = `translate3d(${snappedX}px, 0, 0)`;
         dragRectRef.current.style.width = "0px";
@@ -229,8 +227,6 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
 
     const onMove = (e: PointerEvent) => {
       if (!isDraggingRef.current) {
-        // Hover preview only for mouse / pen; touch shouldn't show a hover
-        // tooltip without an active drag.
         if (e.pointerType !== "touch") showHover(e);
         return;
       }
@@ -238,8 +234,12 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       const x = Math.max(plotLeft, Math.min(plotRight, e.clientX - rect.left));
       const idx = xToIdx(x, plotLeft, plotWidth);
       const snappedX = idxToX(idx, plotLeft, plotWidth);
+      // Once the drag is large enough to actually be a drag (>2px), hide the
+      // hover tooltip so the drag rectangle and label take over.
+      if (Math.abs(snappedX - (dragStartXRef.current ?? snappedX)) > 2) {
+        hideHover();
+      }
       updateDragVisuals(snappedX, e);
-      // Stop the page from scrolling while dragging on touch devices.
       e.preventDefault();
     };
 
@@ -253,7 +253,11 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       }
       const w = dragRectRef.current?.offsetWidth ?? 0;
       if (w < 2) {
-        clearSelection();
+        // Tap without drag — clear any prior selection rectangle, but leave
+        // the hover tooltip visible so the user sees the value at the tap.
+        if (dragRectRef.current) dragRectRef.current.style.opacity = "0";
+        if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
+        hasRectRef.current = false;
         return;
       }
       hasRectRef.current = true;
@@ -342,7 +346,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
                 ? ""
                 : new Intl.NumberFormat("nl-NL", { notation: "compact" }).format(v)
             }
-            width={privacy ? 0 : 72}
+            width={privacy ? 0 : 36}
           />
           <Line
             type="linear"

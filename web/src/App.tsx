@@ -629,8 +629,8 @@ function App() {
         )}
 
         {valuation.length > 0 && latest && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-3">
+          <Card className="px-2 sm:px-6">
+            <CardHeader className="flex flex-row items-center justify-between gap-3 px-0">
               <CardTitle className="flex items-center gap-2 min-w-0">
                 <span className="truncate">
                   {selectedIsin
@@ -675,7 +675,7 @@ function App() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-4 px-0">
               <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
                   <div className="text-sm text-muted-foreground">
