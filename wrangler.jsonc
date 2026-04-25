@@ -1,14 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "girotracker",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-04-25",
   "observability": {
     "enabled": true
   },
   "assets": {
-    "directory": "web"
-  },
-  "compatibility_flags": [
-    "nodejs_compat"
-  ]
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  }
 }
