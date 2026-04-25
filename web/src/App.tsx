@@ -142,6 +142,10 @@ function App() {
   const [valuation, setValuation] = useState<ValuationDay[]>([]);
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
   const [range, setRange] = useState<Range>("MAX");
+  const [customRange, setCustomRange] = useState<{ from: string; to: string }>({
+    from: "",
+    to: "",
+  });
   const [mode, setMode] = useState<Mode>("return");
 
   const handleFile = async (file: File) => {
@@ -279,17 +283,29 @@ function App() {
     [mode, investedByDate],
   );
 
-  const rangeStart = useMemo(
-    () => (latest ? rangeStartDate(range, latest.date, earliestDate) : ""),
-    [range, latest, earliestDate],
+  const rangeStart = useMemo(() => {
+    if (!latest) return "";
+    if (range === "CUSTOM") return customRange.from || earliestDate;
+    return rangeStartDate(range, latest.date, earliestDate);
+  }, [range, customRange, latest, earliestDate]);
+
+  const rangeEnd = useMemo(() => {
+    if (!latest) return "";
+    if (range === "CUSTOM" && customRange.to) return customRange.to;
+    return latest.date;
+  }, [range, customRange, latest]);
+
+  const endDay = useMemo(
+    () => valuation.find((v) => v.date === rangeEnd) ?? latest,
+    [valuation, rangeEnd, latest],
   );
 
   const rangeData = useMemo(
     () =>
       valuation
-        .filter((d) => d.date >= rangeStart)
+        .filter((d) => d.date >= rangeStart && d.date <= rangeEnd)
         .map((d) => ({ date: d.date, value: Math.round(valueForDay(d)) })),
-    [valuation, rangeStart, valueForDay],
+    [valuation, rangeStart, rangeEnd, valueForDay],
   );
 
   const rangeChange = useMemo(() => {
@@ -297,10 +313,6 @@ function App() {
     const start = rangeData[0].value;
     const end = rangeData[rangeData.length - 1].value;
     const abs = end - start;
-    // For Return mode the start can be near zero, which makes a % off start
-    // misleading. Anchor the % to the capital deployed at the end of the
-    // window instead — answers "what's the return on capital actually at
-    // work right now?".
     const denom =
       mode === "value"
         ? start
@@ -309,7 +321,7 @@ function App() {
     return { abs, pct, start, end };
   }, [rangeData, mode, investedByDate]);
 
-  const headlineValue = latest ? valueForDay(latest) : 0;
+  const headlineValue = endDay ? valueForDay(endDay) : 0;
 
   const productByIsin = useMemo(() => {
     const m = new Map<string, string>();
@@ -329,11 +341,11 @@ function App() {
       transactions,
       valuation,
       rangeStart,
-      latest.date,
+      rangeEnd,
       productByIsin,
       tickerByIsin,
     );
-  }, [transactions, valuation, rangeStart, latest, productByIsin, tickerByIsin]);
+  }, [transactions, valuation, rangeStart, rangeEnd, productByIsin, tickerByIsin]);
 
   const [sort, setSort] = useState<{ key: HoldingSortKey; dir: "asc" | "desc" }>({
     key: "valueEur",
@@ -465,7 +477,7 @@ function App() {
                 <div>
                   <div className="text-sm text-muted-foreground">
                     {mode === "return" ? "Total return" : "Portfolio value"} (
-                    {latest.date})
+                    {endDay?.date ?? latest.date})
                   </div>
                   <div className="flex items-baseline gap-3">
                     <span
@@ -498,10 +510,10 @@ function App() {
                       </span>
                     )}
                   </div>
-                  {mode === "return" && latest && (
+                  {mode === "return" && endDay && (
                     <div className="text-xs text-muted-foreground mt-1 tabular-nums">
-                      Capital invested: {fmtEur(investedByDate.get(latest.date) ?? 0)} ·
-                      Market value: {fmtEur(latest.totalEur)}
+                      Capital invested: {fmtEur(investedByDate.get(endDay.date) ?? 0)} ·
+                      Market value: {fmtEur(endDay.totalEur)}
                     </div>
                   )}
                 </div>
@@ -522,7 +534,14 @@ function App() {
                       </button>
                     ))}
                   </div>
-                  <RangeSelector value={range} onChange={setRange} />
+                  <RangeSelector
+                    value={range}
+                    onChange={setRange}
+                    customRange={customRange}
+                    onCustomChange={setCustomRange}
+                    earliestDate={earliestDate}
+                    latestDate={latest?.date ?? today()}
+                  />
                 </div>
               </div>
               <div className="h-[420px]">
@@ -593,7 +612,14 @@ function App() {
                         <p className="text-sm text-muted-foreground">
                           Return € and % are scoped to the selected range.
                         </p>
-                        <RangeSelector value={range} onChange={setRange} />
+                        <RangeSelector
+                    value={range}
+                    onChange={setRange}
+                    customRange={customRange}
+                    onCustomChange={setCustomRange}
+                    earliestDate={earliestDate}
+                    latestDate={latest?.date ?? today()}
+                  />
                       </div>
                       <div className="overflow-x-auto">
                         <Table>
