@@ -379,93 +379,140 @@ function App() {
         </header>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Upload DEGIRO transactions CSV</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => fileInputRef.current?.click()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  fileInputRef.current?.click();
-                }
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver(true);
-              }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(false);
-                const f = e.dataTransfer.files?.[0];
+          <CardContent className={valuation.length > 0 ? "py-3" : "pt-6 space-y-3"}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
                 if (f) void handleFile(f);
+                e.target.value = "";
               }}
-              className={
-                "flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring " +
-                (dragOver
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/50 hover:bg-accent/30")
-              }
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void handleFile(f);
-                  e.target.value = "";
-                }}
-              />
-              <p className="text-sm">
-                <span className="font-medium text-primary">Click to upload</span> or
-                drag and drop a CSV
-              </p>
-              <p className="text-xs text-muted-foreground">DEGIRO Transactions export</p>
-            </div>
-            {fileName && (
-              <p className="text-sm text-muted-foreground">
-                Loaded <span className="font-medium">{fileName}</span>
-              </p>
-            )}
-            {parseErrors.length > 0 && (
-              <div className="text-sm text-destructive">
-                {parseErrors.length} parse error{parseErrors.length === 1 ? "" : "s"}:
-                <ul className="list-disc list-inside">
-                  {parseErrors.slice(0, 5).map((e, i) => (
-                    <li key={i}>{e}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {transactions.length > 0 && (
-              <div className="flex items-center gap-3">
-                <Button
-                  onClick={() => void compute()}
-                  disabled={
-                    status.phase !== "idle" &&
-                    status.phase !== "done" &&
-                    status.phase !== "error"
+            />
+            {valuation.length === 0 ? (
+              <>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) void handleFile(f);
+                  }}
+                  className={
+                    "flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring " +
+                    (dragOver
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50 hover:bg-accent/30")
                   }
                 >
-                  {status.phase === "done" ? "Recompute portfolio" : "Compute portfolio"}
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  {status.phase === "tickers" && "Resolving ISINs…"}
-                  {status.phase === "prices" &&
-                    `Fetching prices ${status.done}/${status.total}…`}
-                  {status.phase === "fx" &&
-                    `Fetching FX rates ${status.done}/${status.total}…`}
-                  {status.phase === "computing" && "Computing valuation…"}
-                  {status.phase === "error" && (
-                    <span className="text-destructive">Error: {status.message}</span>
+                  <p className="text-sm">
+                    <span className="font-medium text-primary">Click to upload</span> or
+                    drag and drop a CSV
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    DEGIRO Transactions export
+                  </p>
+                </div>
+                {fileName && (
+                  <p className="text-sm text-muted-foreground">
+                    Loaded <span className="font-medium">{fileName}</span>
+                  </p>
+                )}
+                {parseErrors.length > 0 && (
+                  <div className="text-sm text-destructive">
+                    {parseErrors.length} parse error
+                    {parseErrors.length === 1 ? "" : "s"}:
+                    <ul className="list-disc list-inside">
+                      {parseErrors.slice(0, 5).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {transactions.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <Button
+                      onClick={() => void compute()}
+                      disabled={
+                        status.phase !== "idle" &&
+                        status.phase !== "done" &&
+                        status.phase !== "error"
+                      }
+                    >
+                      Compute portfolio
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      {status.phase === "tickers" && "Resolving ISINs…"}
+                      {status.phase === "prices" &&
+                        `Fetching prices ${status.done}/${status.total}…`}
+                      {status.phase === "fx" &&
+                        `Fetching FX rates ${status.done}/${status.total}…`}
+                      {status.phase === "computing" && "Computing valuation…"}
+                      {status.phase === "error" && (
+                        <span className="text-destructive">
+                          Error: {status.message}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-muted-foreground truncate">
+                  Loaded <span className="font-medium text-foreground">{fileName}</span>
+                  {status.phase !== "done" && status.phase !== "idle" && (
+                    <span className="ml-3">
+                      {status.phase === "tickers" && "Resolving ISINs…"}
+                      {status.phase === "prices" &&
+                        `Fetching prices ${status.done}/${status.total}…`}
+                      {status.phase === "fx" &&
+                        `Fetching FX rates ${status.done}/${status.total}…`}
+                      {status.phase === "computing" && "Computing valuation…"}
+                    </span>
                   )}
-                </span>
+                  {status.phase === "error" && (
+                    <span className="ml-3 text-destructive">
+                      Error: {status.message}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Upload new file
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => void compute()}
+                    disabled={
+                      status.phase !== "idle" &&
+                      status.phase !== "done" &&
+                      status.phase !== "error"
+                    }
+                  >
+                    Recompute
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>
