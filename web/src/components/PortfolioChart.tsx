@@ -21,6 +21,28 @@ type Props = {
   pctDenomByDate?: Map<string, number>;
 };
 
+const fmtFullDate = (iso: string): string => {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(d);
+};
+
+const fmtAxisDate = (iso: string): string => {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(d);
+};
+
 // Recharts re-paints every data point on every state change, so 1800+ daily
 // points on a ~1000px chart make drag interactions janky. Sub-pixel detail is
 // invisible anyway — decimate to ~MAX_POINTS by uniform sampling, always
@@ -140,7 +162,8 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
         tooltipRef.current.style.transform = `translate3d(${tx}px, 0, 0)`;
         tooltipRef.current.style.opacity = "1";
       }
-      if (tooltipDateRef.current) tooltipDateRef.current.textContent = point.date;
+      if (tooltipDateRef.current)
+        tooltipDateRef.current.textContent = fmtFullDate(point.date);
       if (tooltipValueRef.current) {
         tooltipValueRef.current.textContent = privacyRef.current
           ? "•••"
@@ -176,7 +199,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       const pct = denom > 0 ? abs / denom : 0;
 
       if (dragLabelDateRef.current) {
-        dragLabelDateRef.current.textContent = `${startPoint.date} → ${endPoint.date}`;
+        dragLabelDateRef.current.textContent = `${fmtFullDate(startPoint.date)} → ${fmtFullDate(endPoint.date)}`;
       }
       if (dragLabelDeltaRef.current) {
         const sign = abs >= 0 ? "+" : "";
@@ -338,6 +361,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
             dataKey="date"
             minTickGap={48}
             tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
+            tickFormatter={fmtAxisDate}
           />
           <YAxis
             tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}

@@ -57,14 +57,26 @@ const isoToDate = (s: string): Date | undefined =>
   s ? new Date(`${s}T00:00:00Z`) : undefined;
 const dateToIso = (d: Date): string => d.toISOString().slice(0, 10);
 
-const fmtShort = (s: string): string => {
+const fmtLong = (s: string): string => {
   if (!s) return "";
   const d = new Date(`${s}T00:00:00Z`);
-  return d.toLocaleDateString("nl-NL", {
-    day: "2-digit",
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(d);
+};
+
+const fmtMedium = (s: string): string => {
+  if (!s) return "";
+  const d = new Date(`${s}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
     month: "short",
-    year: "2-digit",
-  });
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(d);
 };
 
 type Props = {
@@ -100,7 +112,7 @@ export const RangeSelector = ({
   const isCustomActive = value === "CUSTOM";
   const hasFrom = !!pending?.from;
   const hasTo = !!pending?.to;
-  const canApply = hasFrom && hasTo;
+  const canApply = hasFrom;
 
   const presetButtonClass = (active: boolean) =>
     "px-3 py-1.5 rounded-md text-sm font-medium transition-colors " +
@@ -112,10 +124,19 @@ export const RangeSelector = ({
   const moreLabel = secondaryActive ? value : "More";
 
   const apply = () => {
-    if (!pending?.from || !pending?.to) return;
+    if (!pending?.from) return;
+    // If the user only picked a start (or react-day-picker mirrored the same
+    // day into `to` on the first click), default the end to the latest day
+    // available — typically "today".
+    const sameDay =
+      !!pending.to && pending.to.getTime() === pending.from.getTime();
+    const to =
+      !pending.to || sameDay
+        ? (isoToDate(latestDate) ?? pending.from)
+        : pending.to;
     onCustomChange({
       from: dateToIso(pending.from),
-      to: dateToIso(pending.to),
+      to: dateToIso(to),
     });
     onChange("CUSTOM");
     setOpen(false);
@@ -199,7 +220,7 @@ export const RangeSelector = ({
           >
             <CalendarIcon className="h-3.5 w-3.5" />
             {isCustomActive && customRange.from && customRange.to
-              ? `${fmtShort(customRange.from)} – ${fmtShort(customRange.to)}`
+              ? `${fmtMedium(customRange.from)} – ${fmtMedium(customRange.to)}`
               : "Custom"}
           </button>
         </PopoverTrigger>
@@ -222,7 +243,7 @@ export const RangeSelector = ({
                   (hasFrom ? "text-foreground" : "text-muted-foreground")
                 }
               >
-                {pending?.from ? fmtShort(dateToIso(pending.from)) : "Pick a date"}
+                {pending?.from ? fmtLong(dateToIso(pending.from)) : "Pick a date"}
               </div>
             </div>
             <div className="text-muted-foreground">→</div>
@@ -246,9 +267,9 @@ export const RangeSelector = ({
                 }
               >
                 {pending?.to
-                  ? fmtShort(dateToIso(pending.to))
+                  ? fmtLong(dateToIso(pending.to))
                   : hasFrom
-                    ? "Click a later date"
+                    ? `Today (${fmtLong(latestDate)})`
                     : "—"}
               </div>
             </div>

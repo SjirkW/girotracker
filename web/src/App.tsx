@@ -50,6 +50,17 @@ const fmtEur = (n: number) =>
 
 const today = (): string => new Date().toISOString().slice(0, 10);
 
+const fmtFullDate = (iso: string): string => {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00Z`);
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(d);
+};
+
 const STORAGE_KEY = "girotracker:session:v1";
 
 type PersistedSession = {
@@ -686,7 +697,7 @@ function App() {
                       : mode === "return"
                         ? "Total return"
                         : "Portfolio value"}{" "}
-                    ({endDay?.date ?? latest.date})
+                    ({fmtFullDate(endDay?.date ?? latest.date)})
                   </div>
                   <div className="flex items-baseline gap-3">
                     {privacy ? (
@@ -887,7 +898,7 @@ function App() {
                                   {h.ticker ?? "—"}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
-                                  {fmtNum(h.quantity, 0)}
+                                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                   {privacy ? "•••" : fmtEur(h.valueEur)}
