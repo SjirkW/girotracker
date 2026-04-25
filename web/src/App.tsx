@@ -8,8 +8,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -148,6 +150,16 @@ function App() {
     to: "",
   });
   const [mode, setMode] = useState<Mode>("return");
+  const [privacy, setPrivacy] = useState(false);
+  const [holdingsQuery, setHoldingsQuery] = useState("");
+  const [tickersQuery, setTickersQuery] = useState("");
+  const [txQuery, setTxQuery] = useState("");
+
+  const fmtPct = (p: number) =>
+    `${p >= 0 ? "+" : ""}${(p * 100).toLocaleString("nl-NL", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}%`;
 
   const handleFile = async (file: File) => {
     const text = await file.text();
@@ -358,15 +370,39 @@ function App() {
       s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" },
     );
 
+  const matchesQuery = (q: string, ...fields: Array<string | null | undefined>) => {
+    if (!q.trim()) return true;
+    const needle = q.trim().toLowerCase();
+    return fields.some((f) => f && f.toLowerCase().includes(needle));
+  };
+
   const sortedHoldings = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
-    return [...holdings].sort((a, b) => {
-      const av = a[sort.key];
-      const bv = b[sort.key];
-      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
-      return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
-    });
-  }, [holdings, sort]);
+    return [...holdings]
+      .filter((h) => matchesQuery(holdingsQuery, h.product, h.ticker, h.isin))
+      .sort((a, b) => {
+        const av = a[sort.key];
+        const bv = b[sort.key];
+        if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+        return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+      });
+  }, [holdings, sort, holdingsQuery]);
+
+  const filteredTickers = useMemo(
+    () =>
+      tickers.filter((t) =>
+        matchesQuery(tickersQuery, t.isin, t.name, t.ticker, t.exchange),
+      ),
+    [tickers, tickersQuery],
+  );
+
+  const filteredTransactions = useMemo(
+    () =>
+      transactions.filter((t) =>
+        matchesQuery(txQuery, t.product, t.isin, t.date, t.currency),
+      ),
+    [transactions, txQuery],
+  );
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -565,37 +601,47 @@ function App() {
                     {endDay?.date ?? latest.date})
                   </div>
                   <div className="flex items-baseline gap-3">
-                    <span
-                      className={
-                        "text-3xl font-semibold tabular-nums " +
-                        (mode === "return"
-                          ? headlineValue >= 0
-                            ? "text-emerald-500"
-                            : "text-red-500"
-                          : "")
-                      }
-                    >
-                      {mode === "return" && headlineValue >= 0 ? "+" : ""}
-                      {fmtEur(headlineValue)}
-                    </span>
-                    {rangeChange && (
-                      <span
-                        className={
-                          "text-base tabular-nums " +
-                          (rangeChange.abs >= 0 ? "text-emerald-500" : "text-red-500")
-                        }
-                      >
-                        {rangeChange.abs >= 0 ? "+" : ""}
-                        {fmtEur(rangeChange.abs)} ({rangeChange.abs >= 0 ? "+" : ""}
-                        {(rangeChange.pct * 100).toLocaleString("nl-NL", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                        %)
-                      </span>
+                    {privacy ? (
+                      rangeChange && (
+                        <span
+                          className={
+                            "text-3xl font-semibold tabular-nums " +
+                            (rangeChange.pct >= 0 ? "text-emerald-500" : "text-red-500")
+                          }
+                        >
+                          {fmtPct(rangeChange.pct)}
+                        </span>
+                      )
+                    ) : (
+                      <>
+                        <span
+                          className={
+                            "text-3xl font-semibold tabular-nums " +
+                            (mode === "return"
+                              ? headlineValue >= 0
+                                ? "text-emerald-500"
+                                : "text-red-500"
+                              : "")
+                          }
+                        >
+                          {mode === "return" && headlineValue >= 0 ? "+" : ""}
+                          {fmtEur(headlineValue)}
+                        </span>
+                        {rangeChange && (
+                          <span
+                            className={
+                              "text-base tabular-nums " +
+                              (rangeChange.abs >= 0 ? "text-emerald-500" : "text-red-500")
+                            }
+                          >
+                            {rangeChange.abs >= 0 ? "+" : ""}
+                            {fmtEur(rangeChange.abs)} ({fmtPct(rangeChange.pct)})
+                          </span>
+                        )}
+                      </>
                     )}
                   </div>
-                  {mode === "return" && endDay && (
+                  {!privacy && mode === "return" && endDay && (
                     <div className="text-xs text-muted-foreground mt-1 tabular-nums">
                       Capital invested: {fmtEur(investedByDate.get(endDay.date) ?? 0)} ·
                       Market value: {fmtEur(endDay.totalEur)}
@@ -603,21 +649,32 @@ function App() {
                   )}
                 </div>
                 <div className="flex flex-col items-end gap-3">
-                  <div className="inline-flex items-center rounded-lg border bg-muted/40 p-1">
-                    {MODES.map((m) => (
-                      <button
-                        key={m.id}
-                        onClick={() => setMode(m.id)}
-                        className={
-                          "px-4 py-1.5 rounded-md text-sm font-medium transition-colors " +
-                          (mode === m.id
-                            ? "bg-background text-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground")
-                        }
-                      >
-                        {m.label}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setPrivacy((p) => !p)}
+                      title={privacy ? "Show values" : "Hide values"}
+                      aria-label={privacy ? "Show values" : "Hide values"}
+                    >
+                      {privacy ? <EyeOff /> : <Eye />}
+                    </Button>
+                    <div className="inline-flex items-center rounded-lg border bg-muted/40 p-1">
+                      {MODES.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => setMode(m.id)}
+                          className={
+                            "px-4 py-1.5 rounded-md text-sm font-medium transition-colors " +
+                            (mode === m.id
+                              ? "bg-background text-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground")
+                          }
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <RangeSelector
                     value={range}
@@ -641,9 +698,11 @@ function App() {
                     <YAxis
                       tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
                       tickFormatter={(v) =>
-                        new Intl.NumberFormat("nl-NL", { notation: "compact" }).format(v)
+                        privacy
+                          ? ""
+                          : new Intl.NumberFormat("nl-NL", { notation: "compact" }).format(v)
                       }
-                      width={72}
+                      width={privacy ? 0 : 72}
                     />
                     <Tooltip
                       contentStyle={{
@@ -652,7 +711,7 @@ function App() {
                         borderRadius: 8,
                         color: "var(--popover-foreground)",
                       }}
-                      formatter={(v) => fmtEur(Number(v))}
+                      formatter={(v) => (privacy ? "•••" : fmtEur(Number(v)))}
                       labelStyle={{ color: "var(--muted-foreground)" }}
                     />
                     <Line
@@ -694,17 +753,32 @@ function App() {
                   ) : (
                     <>
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm text-muted-foreground">
-                          Return € and % are scoped to the selected range.
-                        </p>
-                        <RangeSelector
-                    value={range}
-                    onChange={setRange}
-                    customRange={customRange}
-                    onCustomChange={setCustomRange}
-                    earliestDate={earliestDate}
-                    latestDate={latest?.date ?? today()}
-                  />
+                        <Input
+                          type="search"
+                          placeholder="Filter by name, ticker or ISIN…"
+                          value={holdingsQuery}
+                          onChange={(e) => setHoldingsQuery(e.target.value)}
+                          className="max-w-xs"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => setPrivacy((p) => !p)}
+                            title={privacy ? "Show values" : "Hide values"}
+                            aria-label={privacy ? "Show values" : "Hide values"}
+                          >
+                            {privacy ? <EyeOff /> : <Eye />}
+                          </Button>
+                          <RangeSelector
+                            value={range}
+                            onChange={setRange}
+                            customRange={customRange}
+                            onCustomChange={setCustomRange}
+                            earliestDate={earliestDate}
+                            latestDate={latest?.date ?? today()}
+                          />
+                        </div>
                       </div>
                       <div className="overflow-x-auto">
                         <Table>
@@ -749,10 +823,10 @@ function App() {
                                   {fmtNum(h.quantity, 0)}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
-                                  {fmtEur(h.valueEur)}
+                                  {privacy ? "•••" : fmtEur(h.valueEur)}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums text-muted-foreground">
-                                  {fmtEur(h.investedEur)}
+                                  {privacy ? "•••" : fmtEur(h.investedEur)}
                                 </TableCell>
                                 <TableCell
                                   className={
@@ -762,8 +836,9 @@ function App() {
                                       : "text-red-500")
                                   }
                                 >
-                                  {h.returnEur >= 0 ? "+" : ""}
-                                  {fmtEur(h.returnEur)}
+                                  {privacy
+                                    ? "•••"
+                                    : `${h.returnEur >= 0 ? "+" : ""}${fmtEur(h.returnEur)}`}
                                 </TableCell>
                                 <TableCell
                                   className={
@@ -789,15 +864,22 @@ function App() {
                   )}
                 </TabsContent>
 
-                <TabsContent value="tickers" className="mt-4">
+                <TabsContent value="tickers" className="mt-4 space-y-3">
                   {tickers.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       Click "Compute portfolio" to resolve tickers.
                     </p>
                   ) : (
                     <>
+                      <Input
+                        type="search"
+                        placeholder="Filter by ISIN, name, ticker or exchange…"
+                        value={tickersQuery}
+                        onChange={(e) => setTickersQuery(e.target.value)}
+                        className="max-w-xs"
+                      />
                       {unresolved.length > 0 && (
-                        <p className="text-sm text-destructive mb-3">
+                        <p className="text-sm text-destructive">
                           Unresolved ISINs (excluded from valuation):{" "}
                           {unresolved.map((u) => u.isin).join(", ")}
                         </p>
@@ -814,7 +896,7 @@ function App() {
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {tickers.map((t) => (
+                            {filteredTickers.map((t) => (
                               <TableRow key={t.isin}>
                                 <TableCell className="font-mono text-xs">
                                   {t.isin}
@@ -841,7 +923,14 @@ function App() {
                   )}
                 </TabsContent>
 
-                <TabsContent value="transactions" className="mt-4">
+                <TabsContent value="transactions" className="mt-4 space-y-3">
+                  <Input
+                    type="search"
+                    placeholder="Filter by date, product, ISIN or currency…"
+                    value={txQuery}
+                    onChange={(e) => setTxQuery(e.target.value)}
+                    className="max-w-xs"
+                  />
                   <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
@@ -856,7 +945,7 @@ function App() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {transactions
+                        {filteredTransactions
                           .slice()
                           .reverse()
                           .map((t, i) => (
