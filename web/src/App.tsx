@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CartesianGrid,
   Line,
@@ -10,7 +10,6 @@ import {
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -141,6 +140,8 @@ function App() {
   const [tickers, setTickers] = useState<TickerLookupResult[]>([]);
   const [valuation, setValuation] = useState<ValuationDay[]>([]);
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [range, setRange] = useState<Range>("MAX");
   const [customRange, setCustomRange] = useState<{ from: string; to: string }>({
     from: "",
@@ -382,14 +383,51 @@ function App() {
             <CardTitle>Upload DEGIRO transactions CSV</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const f = e.dataTransfer.files?.[0];
                 if (f) void handleFile(f);
               }}
-            />
+              className={
+                "flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring " +
+                (dragOver
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:border-primary/50 hover:bg-accent/30")
+              }
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleFile(f);
+                  e.target.value = "";
+                }}
+              />
+              <p className="text-sm">
+                <span className="font-medium text-primary">Click to upload</span> or
+                drag and drop a CSV
+              </p>
+              <p className="text-xs text-muted-foreground">DEGIRO Transactions export</p>
+            </div>
             {fileName && (
               <p className="text-sm text-muted-foreground">
                 Loaded <span className="font-medium">{fileName}</span>
