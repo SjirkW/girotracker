@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Calendar as CalendarIcon } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronDown } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -12,7 +12,10 @@ import {
 export const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX", "CUSTOM"] as const;
 export type Range = (typeof RANGES)[number];
 
-const PRESETS: Range[] = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"];
+// On narrow viewports we only show the most-used presets inline; the rest
+// collapse into a "More" popover (Google Stocks pattern).
+const PRIMARY_PRESETS: Range[] = ["1D", "5D", "1M", "MAX"];
+const SECONDARY_PRESETS: Range[] = ["6M", "YTD", "1Y", "5Y"];
 
 /**
  * Resolve the inclusive lower bound of a preset range, anchored at `latest`.
@@ -93,10 +96,20 @@ export const RangeSelector = ({
     if (open) setPending(undefined);
   }, [open]);
 
+  const [moreOpen, setMoreOpen] = useState(false);
   const isCustomActive = value === "CUSTOM";
   const hasFrom = !!pending?.from;
   const hasTo = !!pending?.to;
   const canApply = hasFrom && hasTo;
+
+  const presetButtonClass = (active: boolean) =>
+    "px-3 py-1.5 rounded-md text-sm font-medium transition-colors " +
+    (active
+      ? "bg-primary text-primary-foreground"
+      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground");
+
+  const secondaryActive = SECONDARY_PRESETS.includes(value);
+  const moreLabel = secondaryActive ? value : "More";
 
   const apply = () => {
     if (!pending?.from || !pending?.to) return;
@@ -115,20 +128,65 @@ export const RangeSelector = ({
 
   return (
     <div className="flex items-center gap-1">
-      {PRESETS.map((r) => (
+      {PRIMARY_PRESETS.map((r) => (
+        <button
+          key={r}
+          onClick={() => onChange(r)}
+          className={presetButtonClass(value === r)}
+        >
+          {r}
+        </button>
+      ))}
+
+      {/* Secondary presets: inline at md+, hidden on smaller screens. */}
+      {SECONDARY_PRESETS.map((r) => (
         <button
           key={r}
           onClick={() => onChange(r)}
           className={
-            "px-3 py-1.5 rounded-md text-sm font-medium transition-colors " +
-            (value === r
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+            "hidden md:inline-block " + presetButtonClass(value === r)
           }
         >
           {r}
         </button>
       ))}
+
+      {/* "More" popover: visible only on narrow screens, hosts the secondary presets. */}
+      <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+        <PopoverTrigger asChild>
+          <button
+            className={
+              "md:hidden inline-flex items-center gap-1 " +
+              presetButtonClass(secondaryActive)
+            }
+          >
+            {moreLabel}
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-32 p-1" align="end">
+          <div className="flex flex-col">
+            {SECONDARY_PRESETS.map((r) => (
+              <button
+                key={r}
+                onClick={() => {
+                  onChange(r);
+                  setMoreOpen(false);
+                }}
+                className={
+                  "px-3 py-2 rounded-md text-sm font-medium text-left transition-colors " +
+                  (value === r
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+                }
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button

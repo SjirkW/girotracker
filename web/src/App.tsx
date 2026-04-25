@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PortfolioChart } from "@/components/PortfolioChart";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -155,6 +155,7 @@ function App() {
   const [holdingsQuery, setHoldingsQuery] = useState("");
   const [tickersQuery, setTickersQuery] = useState("");
   const [txQuery, setTxQuery] = useState("");
+  const [activeTab, setActiveTab] = useState("holdings");
   const [hydrated, setHydrated] = useState(false);
 
   // Restore previous session on first mount.
@@ -474,139 +475,131 @@ function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto max-w-6xl p-6 space-y-6">
-        <header>
-          <h1 className="text-3xl font-semibold tracking-tight">Girotracker</h1>
-          <p className="text-muted-foreground text-sm">
-            DEGIRO portfolio value over time
-          </p>
-        </header>
+      <div className="mx-auto max-w-6xl p-4 space-y-4">
+        {/* Hidden file input lives at the top so any button (header on mobile,
+            card on desktop) can trigger it without depending on card visibility. */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+            e.target.value = "";
+          }}
+        />
 
-        <Card>
-          <CardContent className={valuation.length > 0 ? "py-3" : "pt-6 space-y-3"}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void handleFile(f);
-                e.target.value = "";
-              }}
-            />
-            {valuation.length === 0 ? (
-              <>
-                <div
-                  role="button"
-                  tabIndex={0}
+        <header className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Girotracker</h1>
+            <p className="text-muted-foreground text-sm">
+              DEGIRO portfolio value over time
+            </p>
+          </div>
+          {valuation.length > 0 && (
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={() => fileInputRef.current?.click()}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      fileInputRef.current?.click();
-                    }
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOver(true);
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDragOver(false);
-                    const f = e.dataTransfer.files?.[0];
-                    if (f) void handleFile(f);
-                  }}
-                  className={
-                    "flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring " +
-                    (dragOver
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:border-primary/50 hover:bg-accent/30")
+                  title="Upload new file"
+                  aria-label="Upload new file"
+                >
+                  <Upload />
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void compute()}
+                  disabled={
+                    status.phase !== "idle" &&
+                    status.phase !== "done" &&
+                    status.phase !== "error"
                   }
                 >
-                  <p className="text-sm">
-                    <span className="font-medium text-primary">Click to upload</span> or
-                    drag and drop a CSV
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    DEGIRO Transactions export
-                  </p>
-                </div>
-                {fileName && (
-                  <p className="text-sm text-muted-foreground">
-                    Loaded <span className="font-medium">{fileName}</span>
-                  </p>
-                )}
-                {parseErrors.length > 0 && (
-                  <div className="text-sm text-destructive">
-                    {parseErrors.length} parse error
-                    {parseErrors.length === 1 ? "" : "s"}:
-                    <ul className="list-disc list-inside">
-                      {parseErrors.slice(0, 5).map((e, i) => (
-                        <li key={i}>{e}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {transactions.length > 0 && (
-                  <div className="flex items-center gap-3">
-                    <Button
-                      onClick={() => void compute()}
-                      disabled={
-                        status.phase !== "idle" &&
-                        status.phase !== "done" &&
-                        status.phase !== "error"
-                      }
-                    >
-                      Compute portfolio
-                    </Button>
-                    <span className="text-sm text-muted-foreground">
-                      {status.phase === "tickers" && "Resolving ISINs…"}
-                      {status.phase === "prices" &&
-                        `Fetching prices ${status.done}/${status.total}…`}
-                      {status.phase === "fx" &&
-                        `Fetching FX rates ${status.done}/${status.total}…`}
-                      {status.phase === "computing" && "Computing valuation…"}
-                      {status.phase === "error" && (
-                        <span className="text-destructive">
-                          Error: {status.message}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm text-muted-foreground truncate">
-                  Loaded <span className="font-medium text-foreground">{fileName}</span>
-                  {status.phase !== "done" && status.phase !== "idle" && (
-                    <span className="ml-3">
-                      {status.phase === "tickers" && "Resolving ISINs…"}
-                      {status.phase === "prices" &&
-                        `Fetching prices ${status.done}/${status.total}…`}
-                      {status.phase === "fx" &&
-                        `Fetching FX rates ${status.done}/${status.total}…`}
-                      {status.phase === "computing" && "Computing valuation…"}
-                    </span>
-                  )}
+                  Recompute
+                </Button>
+              </div>
+              {(status.phase === "tickers" ||
+                status.phase === "prices" ||
+                status.phase === "fx" ||
+                status.phase === "computing" ||
+                status.phase === "error") && (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {status.phase === "tickers" && "Resolving ISINs…"}
+                  {status.phase === "prices" &&
+                    `Fetching prices ${status.done}/${status.total}…`}
+                  {status.phase === "fx" &&
+                    `Fetching FX rates ${status.done}/${status.total}…`}
+                  {status.phase === "computing" && "Computing valuation…"}
                   {status.phase === "error" && (
-                    <span className="ml-3 text-destructive">
-                      Error: {status.message}
-                    </span>
+                    <span className="text-destructive">Error: {status.message}</span>
                   )}
+                </span>
+              )}
+            </div>
+          )}
+        </header>
+
+        {valuation.length === 0 && (
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) void handleFile(f);
+                }}
+                className={
+                  "flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring " +
+                  (dragOver
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/50 hover:bg-accent/30")
+                }
+              >
+                <p className="text-sm">
+                  <span className="font-medium text-primary">Click to upload</span> or
+                  drag and drop a CSV
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  DEGIRO Transactions export
+                </p>
+              </div>
+              {fileName && (
+                <p className="text-sm text-muted-foreground">
+                  Loaded <span className="font-medium">{fileName}</span>
+                </p>
+              )}
+              {parseErrors.length > 0 && (
+                <div className="text-sm text-destructive">
+                  {parseErrors.length} parse error
+                  {parseErrors.length === 1 ? "" : "s"}:
+                  <ul className="list-disc list-inside">
+                    {parseErrors.slice(0, 5).map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
                 </div>
-                <div className="flex items-center gap-2">
+              )}
+              {transactions.length > 0 && (
+                <div className="flex items-center gap-3">
                   <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    Upload new file
-                  </Button>
-                  <Button
-                    size="sm"
                     onClick={() => void compute()}
                     disabled={
                       status.phase !== "idle" &&
@@ -614,53 +607,32 @@ function App() {
                       status.phase !== "error"
                     }
                   >
-                    Recompute
+                    Compute portfolio
                   </Button>
+                  <span className="text-sm text-muted-foreground">
+                    {status.phase === "tickers" && "Resolving ISINs…"}
+                    {status.phase === "prices" &&
+                      `Fetching prices ${status.done}/${status.total}…`}
+                    {status.phase === "fx" &&
+                      `Fetching FX rates ${status.done}/${status.total}…`}
+                    {status.phase === "computing" && "Computing valuation…"}
+                    {status.phase === "error" && (
+                      <span className="text-destructive">
+                        Error: {status.message}
+                      </span>
+                    )}
+                  </span>
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {stats && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Summary</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Transactions</dt>
-                  <dd className="text-lg font-medium">{stats.count}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Unique ISINs</dt>
-                  <dd className="text-lg font-medium">{stats.isins}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Buys / Sells</dt>
-                  <dd className="text-lg font-medium">
-                    {stats.buys} / {stats.sells}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">First trade</dt>
-                  <dd className="text-lg font-medium">{stats.first}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Last trade</dt>
-                  <dd className="text-lg font-medium">{stats.last}</dd>
-                </div>
-              </dl>
+              )}
             </CardContent>
           </Card>
         )}
 
         {valuation.length > 0 && latest && (
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <span>
+            <CardHeader className="flex flex-row items-center justify-between gap-3">
+              <CardTitle className="flex items-center gap-2 min-w-0">
+                <span className="truncate">
                   {selectedIsin
                     ? `${productByIsin.get(selectedIsin) ?? selectedIsin} over time`
                     : "Portfolio value over time"}
@@ -671,10 +643,37 @@ function App() {
                     size="xs"
                     onClick={() => setSelectedIsin(null)}
                   >
-                    ← Back to portfolio
+                    ← Back
                   </Button>
                 )}
               </CardTitle>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setPrivacy((p) => !p)}
+                  title={privacy ? "Show values" : "Hide values"}
+                  aria-label={privacy ? "Show values" : "Hide values"}
+                >
+                  {privacy ? <EyeOff /> : <Eye />}
+                </Button>
+                <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
+                  {MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => setMode(m.id)}
+                      className={
+                        "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
+                        (mode === m.id
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground")
+                      }
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap items-end justify-between gap-4">
@@ -738,43 +737,14 @@ function App() {
                     </div>
                   )}
                 </div>
-                <div className="flex flex-col items-end gap-3 ml-auto">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setPrivacy((p) => !p)}
-                      title={privacy ? "Show values" : "Hide values"}
-                      aria-label={privacy ? "Show values" : "Hide values"}
-                    >
-                      {privacy ? <EyeOff /> : <Eye />}
-                    </Button>
-                    <div className="inline-flex items-center rounded-lg border bg-muted/40 p-1">
-                      {MODES.map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => setMode(m.id)}
-                          className={
-                            "px-4 py-1.5 rounded-md text-sm font-medium transition-colors " +
-                            (mode === m.id
-                              ? "bg-background text-foreground shadow-sm"
-                              : "text-muted-foreground hover:text-foreground")
-                          }
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <RangeSelector
-                    value={range}
-                    onChange={setRange}
-                    customRange={customRange}
-                    onCustomChange={setCustomRange}
-                    earliestDate={earliestDate}
-                    latestDate={latest?.date ?? today()}
-                  />
-                </div>
+                <RangeSelector
+                  value={range}
+                  onChange={setRange}
+                  customRange={customRange}
+                  onCustomChange={setCustomRange}
+                  earliestDate={earliestDate}
+                  latestDate={latest?.date ?? today()}
+                />
               </div>
               <PortfolioChart
                 data={rangeData}
@@ -789,18 +759,47 @@ function App() {
         {transactions.length > 0 && (
           <Card>
             <CardContent className="pt-6">
-              <Tabs defaultValue="holdings">
-                <TabsList>
-                  <TabsTrigger value="holdings">Holdings</TabsTrigger>
-                  <TabsTrigger value="tickers">
-                    Tickers
-                    {tickers.length > 0 &&
-                      ` (${tickers.length - unresolved.length}/${tickers.length})`}
-                  </TabsTrigger>
-                  <TabsTrigger value="transactions">
-                    Transactions ({transactions.length})
-                  </TabsTrigger>
-                </TabsList>
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <div className="flex items-center justify-between gap-3">
+                  <TabsList>
+                    <TabsTrigger value="holdings">Holdings</TabsTrigger>
+                    <TabsTrigger value="tickers">
+                      Tickers
+                      {tickers.length > 0 &&
+                        ` (${tickers.length - unresolved.length}/${tickers.length})`}
+                    </TabsTrigger>
+                    <TabsTrigger value="transactions">
+                      Transactions ({transactions.length})
+                    </TabsTrigger>
+                  </TabsList>
+                  {/* Inline filter on viewports wide enough to fit it next to the
+                      tabs; on narrower screens, each tab's content shows its
+                      own filter input below. */}
+                  <Input
+                    type="search"
+                    placeholder={
+                      activeTab === "tickers"
+                        ? "Filter by ISIN, name, ticker or exchange…"
+                        : activeTab === "transactions"
+                          ? "Filter by date, product, ISIN or currency…"
+                          : "Filter by name, ticker or ISIN…"
+                    }
+                    value={
+                      activeTab === "tickers"
+                        ? tickersQuery
+                        : activeTab === "transactions"
+                          ? txQuery
+                          : holdingsQuery
+                    }
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (activeTab === "tickers") setTickersQuery(v);
+                      else if (activeTab === "transactions") setTxQuery(v);
+                      else setHoldingsQuery(v);
+                    }}
+                    className="hidden md:block max-w-xs"
+                  />
+                </div>
 
                 <TabsContent value="holdings" className="mt-4 space-y-3">
                   {valuation.length === 0 ? (
@@ -815,7 +814,7 @@ function App() {
                           placeholder="Filter by name, ticker or ISIN…"
                           value={holdingsQuery}
                           onChange={(e) => setHoldingsQuery(e.target.value)}
-                          className="max-w-xs"
+                          className="max-w-xs md:hidden"
                         />
                         <div className="flex items-center gap-2">
                           <Button
@@ -944,7 +943,7 @@ function App() {
                         placeholder="Filter by ISIN, name, ticker or exchange…"
                         value={tickersQuery}
                         onChange={(e) => setTickersQuery(e.target.value)}
-                        className="max-w-xs"
+                        className="max-w-xs md:hidden"
                       />
                       {unresolved.length > 0 && (
                         <p className="text-sm text-destructive">
@@ -997,7 +996,7 @@ function App() {
                     placeholder="Filter by date, product, ISIN or currency…"
                     value={txQuery}
                     onChange={(e) => setTxQuery(e.target.value)}
-                    className="max-w-xs"
+                    className="max-w-xs md:hidden"
                   />
                   <div className="overflow-x-auto">
                     <Table>
@@ -1047,6 +1046,40 @@ function App() {
                   </div>
                 </TabsContent>
               </Tabs>
+            </CardContent>
+          </Card>
+        )}
+
+        {stats && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
+                <div>
+                  <dt className="text-muted-foreground">Transactions</dt>
+                  <dd className="text-lg font-medium">{stats.count}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Unique ISINs</dt>
+                  <dd className="text-lg font-medium">{stats.isins}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Buys / Sells</dt>
+                  <dd className="text-lg font-medium">
+                    {stats.buys} / {stats.sells}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">First trade</dt>
+                  <dd className="text-lg font-medium">{stats.first}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Last trade</dt>
+                  <dd className="text-lg font-medium">{stats.last}</dd>
+                </div>
+              </dl>
             </CardContent>
           </Card>
         )}
