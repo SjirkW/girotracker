@@ -180,31 +180,30 @@ export type HoldingRow = {
   ticker: string | null;
   quantity: number;
   valueEur: number;        // market value at endDate
-  investedEur: number;     // gross cumulative buy cost (sells don't reduce it)
+  investedEur: number;     // peak net capital ever deployed in this ISIN (high-water mark)
   returnEur: number;       // profit change over [startDate, endDate]
-  returnPct: number;       // returnEur as a fraction of capital exposed during the range
+  returnPct: number;       // returnEur / peak capital
 };
 
 /**
  * Per-ISIN summary at `endDate`, with profit/return scoped to [startDate, endDate].
  *
- * `investedEur` is the GROSS cumulative buy cost up to `endDate` — sells do
- * not reduce it. This matches the question "how much money did I commit to
- * this stock?". Net cash flow (gross buys minus sell proceeds) is misleading
- * for closed positions: a stock you bought for €500 and sold for €700 would
- * otherwise show "invested = −€200", which is nonsense as a denominator.
+ * `investedEur` is the **peak net capital deployed** — the high-water mark
+ * of (cumulative buys − cumulative sells) walked over time. This is the
+ * right answer to "how much money did I commit to this stock?":
+ *   - Closed-profitable: peak right before the sale (Intel: €2,200).
+ *   - Cycled positions: doesn't double-count recycled proceeds (HIMS shows
+ *     ~€4k peak even with €11k of gross buys, because sells freed capital
+ *     to be reused for the next buy).
+ *   - Net-cash-out positions: the original buy amount.
  *
- * `returnEur` is the change in cumulative profit over the window, so fresh
- * capital deployed inside the window doesn't get counted as profit and sales
- * outside the window don't get double-counted.
+ * `returnEur` is the change in cumulative profit over the window. Profit at
+ * a point in time = market_value − net_invested, so the change captures only
+ * what the market did during the window (fresh capital and proceeds are
+ * accounted for, not counted as profit).
  *
- * `returnPct` divides by capital exposed during the range:
- *   |valueAtStart| (capital still at risk going in) + grossBuysInRange
- *     (new capital deployed during the window)
- * This recovers sensible numbers in every case:
- *   - Closed positions on MAX: 0 + total_gross_buys → return-on-investment
- *   - Pure hold (no in-range trades): valueAtStart → time-weighted-ish return
- *   - Mid-range buys: both terms contribute, a capital-weighted return
+ * `returnPct` divides by peak capital — the most realistic denominator since
+ * it represents the most money this position ever held.
  */
 export const computeHoldings = (
   txs: Transaction[],
@@ -216,47 +215,49 @@ export const computeHoldings = (
 ): HoldingRow[] => {
   if (valuation.length === 0) return [];
 
-  // Net invested (used for profit math): buys add, sells subtract.
-  const netDeltas = new Map<string, Map<string, number>>();
-  // Gross invested (used for the user-facing denominator): buys only.
-  const grossDeltas = new Map<string, Map<string, number>>();
+  // Net invested cumulative deltas, used both for profit math AND for walking
+  // the high-water mark of capital deployed.
+  const txsByIsin = new Map<string, Transaction[]>();
   for (const t of txs) {
-    let n = netDeltas.get(t.isin);
-    if (!n) {
-      n = new Map();
-      netDeltas.set(t.isin, n);
+    let arr = txsByIsin.get(t.isin);
+    if (!arr) {
+      arr = [];
+      txsByIsin.set(t.isin, arr);
     }
-    n.set(t.date, (n.get(t.date) ?? 0) - t.totalEur);
-
-    if (t.quantity > 0) {
-      let g = grossDeltas.get(t.isin);
-      if (!g) {
-        g = new Map();
-        grossDeltas.set(t.isin, g);
-      }
-      g.set(t.date, (g.get(t.date) ?? 0) + Math.abs(t.totalEur));
-    }
+    arr.push(t);
+  }
+  for (const arr of txsByIsin.values()) {
+    arr.sort((a, b) =>
+      a.date === b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date),
+    );
   }
 
-  const cumulativeAt = (
-    bucket: Map<string, Map<string, number>>,
-    isin: string,
-    date: string,
-  ): number => {
-    const deltas = bucket.get(isin);
-    if (!deltas) return 0;
-    let total = 0;
-    for (const [d, v] of deltas) {
-      if (d <= date) total += v;
+  const netInvestedAt = (isin: string, date: string): number => {
+    const arr = txsByIsin.get(isin);
+    if (!arr) return 0;
+    let net = 0;
+    for (const t of arr) {
+      if (t.date > date) break;
+      net -= t.totalEur;
     }
-    return total;
+    return net;
+  };
+
+  const peakNetInvested = (isin: string, throughDate: string): number => {
+    const arr = txsByIsin.get(isin);
+    if (!arr) return 0;
+    let net = 0;
+    let peak = 0;
+    for (const t of arr) {
+      if (t.date > throughDate) break;
+      net -= t.totalEur;
+      if (net > peak) peak = net;
+    }
+    return peak;
   };
 
   const endDay = valuation.find((v) => v.date === endDate) ?? valuation[valuation.length - 1];
   const startDay = valuation.find((v) => v.date === startDate);
-
-  const isins = new Set<string>();
-  for (const t of txs) isins.add(t.isin);
 
   const qtyAtEnd = new Map<string, number>();
   for (const t of txs) {
@@ -266,18 +267,15 @@ export const computeHoldings = (
   }
 
   const rows: HoldingRow[] = [];
-  for (const isin of isins) {
+  for (const isin of txsByIsin.keys()) {
     const endValue = endDay.perIsinEur[isin] ?? 0;
-    const endNet = cumulativeAt(netDeltas, isin, endDate);
+    const endNet = netInvestedAt(isin, endDate);
     const startValue = startDay?.perIsinEur[isin] ?? 0;
-    const startNet = startDay ? cumulativeAt(netDeltas, isin, startDate) : 0;
-    const endGross = cumulativeAt(grossDeltas, isin, endDate);
-    const startGross = startDay ? cumulativeAt(grossDeltas, isin, startDate) : 0;
+    const startNet = startDay ? netInvestedAt(isin, startDate) : 0;
 
     const returnEur = endValue - endNet - (startValue - startNet);
-    const grossInRange = Math.max(0, endGross - startGross);
-    const denom = Math.max(0, startValue) + grossInRange;
-    const returnPct = denom > 0 ? returnEur / denom : 0;
+    const peak = peakNetInvested(isin, endDate);
+    const returnPct = peak > 0 ? returnEur / peak : 0;
 
     rows.push({
       isin,
@@ -285,7 +283,7 @@ export const computeHoldings = (
       ticker: tickerByIsin.get(isin) ?? null,
       quantity: qtyAtEnd.get(isin) ?? 0,
       valueEur: endValue,
-      investedEur: endGross,
+      investedEur: peak,
       returnEur,
       returnPct,
     });
