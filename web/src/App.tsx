@@ -726,15 +726,21 @@ function App() {
                           {mode === "return" && headlineValue >= 0 ? "+" : ""}
                           {fmtEur(headlineValue)}
                         </span>
-                        {rangeChange && rangeStart > earliestDate && (
+                        {rangeChange && (
                           <span
                             className={
                               "text-base tabular-nums " +
                               (rangeChange.abs >= 0 ? "text-emerald-500" : "text-red-500")
                             }
                           >
-                            {rangeChange.abs >= 0 ? "+" : ""}
-                            {fmtEur(rangeChange.abs)} ({fmtPct(rangeChange.pct)})
+                            {rangeStart > earliestDate ? (
+                              <>
+                                {rangeChange.abs >= 0 ? "+" : ""}
+                                {fmtEur(rangeChange.abs)} ({fmtPct(rangeChange.pct)})
+                              </>
+                            ) : (
+                              fmtPct(rangeChange.pct)
+                            )}
                           </span>
                         )}
                       </>
