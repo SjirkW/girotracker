@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   CartesianGrid,
   Line,
@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -19,11 +20,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  RangeSelector,
+  rangeStartDate,
+  type Range,
+} from "@/components/RangeSelector";
 import { fetchPrices, resolveTickers, type TickerLookupResult } from "@/lib/api";
 import { parseDegiroCsv, type Transaction } from "@/lib/parseCsv";
 import {
   buildDailyHoldings,
   buildDailyInvested,
+  computeHoldings,
   computeValuation,
   enumerateDates,
   forwardFillDaily,
@@ -69,32 +76,53 @@ async function pMapLimit<T, R>(
   return results;
 }
 
-const RANGES = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"] as const;
-type Range = (typeof RANGES)[number];
-
 const MODES = [
   { id: "return", label: "Return" },
   { id: "value", label: "Value" },
 ] as const;
 type Mode = (typeof MODES)[number]["id"];
 
-const rangeStartDate = (range: Range, latest: string, earliest: string): string => {
-  const d = new Date(`${latest}T00:00:00Z`);
-  const apply = (fn: (x: Date) => void) => {
-    const c = new Date(d);
-    fn(c);
-    return c.toISOString().slice(0, 10);
-  };
-  switch (range) {
-    case "1D": return apply((c) => c.setUTCDate(c.getUTCDate() - 1));
-    case "5D": return apply((c) => c.setUTCDate(c.getUTCDate() - 5));
-    case "1M": return apply((c) => c.setUTCMonth(c.getUTCMonth() - 1));
-    case "6M": return apply((c) => c.setUTCMonth(c.getUTCMonth() - 6));
-    case "YTD": return `${d.getUTCFullYear()}-01-01`;
-    case "1Y": return apply((c) => c.setUTCFullYear(c.getUTCFullYear() - 1));
-    case "5Y": return apply((c) => c.setUTCFullYear(c.getUTCFullYear() - 5));
-    case "MAX": return earliest;
-  }
+type HoldingSortKey =
+  | "product"
+  | "ticker"
+  | "quantity"
+  | "valueEur"
+  | "investedEur"
+  | "returnEur"
+  | "returnPct";
+
+type SortState = { key: HoldingSortKey; dir: "asc" | "desc" };
+
+const SortableTh = ({
+  sortKey,
+  sort,
+  onToggle,
+  align = "left",
+  children,
+}: {
+  sortKey: HoldingSortKey;
+  sort: SortState;
+  onToggle: (key: HoldingSortKey) => void;
+  align?: "left" | "right";
+  children: ReactNode;
+}) => {
+  const active = sort.key === sortKey;
+  const arrow = !active ? "" : sort.dir === "desc" ? "↓" : "↑";
+  return (
+    <TableHead className={align === "right" ? "text-right" : ""}>
+      <button
+        type="button"
+        onClick={() => onToggle(sortKey)}
+        className={
+          "inline-flex items-center gap-1 transition-colors " +
+          (active ? "text-foreground" : "hover:text-foreground")
+        }
+      >
+        {children}
+        <span className="text-xs opacity-70 w-3 inline-block text-left">{arrow}</span>
+      </button>
+    </TableHead>
+  );
 };
 
 type ComputeStatus =
@@ -283,6 +311,50 @@ function App() {
 
   const headlineValue = latest ? valueForDay(latest) : 0;
 
+  const productByIsin = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of transactions) if (!m.has(t.isin)) m.set(t.isin, t.product);
+    return m;
+  }, [transactions]);
+
+  const tickerByIsin = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of tickers) if (r.ticker) m.set(r.isin, r.ticker);
+    return m;
+  }, [tickers]);
+
+  const holdings = useMemo(() => {
+    if (!latest) return [];
+    return computeHoldings(
+      transactions,
+      valuation,
+      rangeStart,
+      latest.date,
+      productByIsin,
+      tickerByIsin,
+    );
+  }, [transactions, valuation, rangeStart, latest, productByIsin, tickerByIsin]);
+
+  const [sort, setSort] = useState<{ key: HoldingSortKey; dir: "asc" | "desc" }>({
+    key: "valueEur",
+    dir: "desc",
+  });
+
+  const toggleSort = (key: HoldingSortKey) =>
+    setSort((s) =>
+      s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" },
+    );
+
+  const sortedHoldings = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...holdings].sort((a, b) => {
+      const av = a[sort.key];
+      const bv = b[sort.key];
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+    });
+  }, [holdings, sort]);
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto max-w-6xl p-6 space-y-6">
@@ -450,22 +522,7 @@ function App() {
                       </button>
                     ))}
                   </div>
-                  <div className="flex items-center gap-1">
-                    {RANGES.map((r) => (
-                      <button
-                        key={r}
-                        onClick={() => setRange(r)}
-                        className={
-                          "px-3 py-1.5 rounded-md text-sm font-medium transition-colors " +
-                          (range === r
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
-                        }
-                      >
-                        {r}
-                      </button>
-                    ))}
-                  </div>
+                  <RangeSelector value={range} onChange={setRange} />
                 </div>
               </div>
               <div className="h-[420px]">
@@ -509,95 +566,219 @@ function App() {
           </Card>
         )}
 
-        {tickers.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                Resolved tickers ({tickers.length - unresolved.length}/{tickers.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {unresolved.length > 0 && (
-                <p className="text-sm text-destructive mb-3">
-                  Unresolved ISINs (excluded from valuation):{" "}
-                  {unresolved.map((u) => u.isin).join(", ")}
-                </p>
-              )}
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>ISIN</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Yahoo ticker</TableHead>
-                      <TableHead>Exchange</TableHead>
-                      <TableHead>Source</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {tickers.map((t) => (
-                      <TableRow key={t.isin}>
-                        <TableCell className="font-mono text-xs">{t.isin}</TableCell>
-                        <TableCell className="max-w-[280px] truncate" title={t.name ?? ""}>
-                          {t.name ?? "—"}
-                        </TableCell>
-                        <TableCell className="font-mono">{t.ticker ?? "—"}</TableCell>
-                        <TableCell>{t.exchange ?? "—"}</TableCell>
-                        <TableCell className="text-muted-foreground">{t.source}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {transactions.length > 0 && (
           <Card>
-            <CardHeader>
-              <CardTitle>Transactions</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Product</TableHead>
-                      <TableHead>ISIN</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Price</TableHead>
-                      <TableHead>Ccy</TableHead>
-                      <TableHead className="text-right">Total EUR</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {transactions
-                      .slice()
-                      .reverse()
-                      .map((t, i) => (
-                        <TableRow key={`${t.orderId}-${i}`}>
-                          <TableCell className="whitespace-nowrap">{t.date}</TableCell>
-                          <TableCell className="max-w-[280px] truncate" title={t.product}>
-                            {t.product}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">{t.isin}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNum(t.quantity, 0)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNum(t.price, 4)}
-                          </TableCell>
-                          <TableCell>{t.currency}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNum(t.totalEur)}
-                          </TableCell>
+            <CardContent className="pt-6">
+              <Tabs defaultValue="holdings">
+                <TabsList>
+                  <TabsTrigger value="holdings">Holdings</TabsTrigger>
+                  <TabsTrigger value="tickers">
+                    Tickers
+                    {tickers.length > 0 &&
+                      ` (${tickers.length - unresolved.length}/${tickers.length})`}
+                  </TabsTrigger>
+                  <TabsTrigger value="transactions">
+                    Transactions ({transactions.length})
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="holdings" className="mt-4 space-y-3">
+                  {valuation.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Click "Compute portfolio" to see per-stock returns.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-sm text-muted-foreground">
+                          Return € and % are scoped to the selected range.
+                        </p>
+                        <RangeSelector value={range} onChange={setRange} />
+                      </div>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <SortableTh sortKey="product" sort={sort} onToggle={toggleSort}>
+                                Stock
+                              </SortableTh>
+                              <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
+                                Ticker
+                              </SortableTh>
+                              <SortableTh sortKey="quantity" sort={sort} onToggle={toggleSort} align="right">
+                                Qty
+                              </SortableTh>
+                              <SortableTh sortKey="valueEur" sort={sort} onToggle={toggleSort} align="right">
+                                Value
+                              </SortableTh>
+                              <SortableTh sortKey="investedEur" sort={sort} onToggle={toggleSort} align="right">
+                                Invested
+                              </SortableTh>
+                              <SortableTh sortKey="returnEur" sort={sort} onToggle={toggleSort} align="right">
+                                Return
+                              </SortableTh>
+                              <SortableTh sortKey="returnPct" sort={sort} onToggle={toggleSort} align="right">
+                                Return %
+                              </SortableTh>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {sortedHoldings.map((h) => (
+                              <TableRow key={h.isin}>
+                                <TableCell
+                                  className="max-w-[280px] truncate"
+                                  title={h.product}
+                                >
+                                  {h.product}
+                                </TableCell>
+                                <TableCell className="font-mono text-xs">
+                                  {h.ticker ?? "—"}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {fmtNum(h.quantity, 0)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {fmtEur(h.valueEur)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums text-muted-foreground">
+                                  {fmtEur(h.investedEur)}
+                                </TableCell>
+                                <TableCell
+                                  className={
+                                    "text-right tabular-nums " +
+                                    (h.returnEur >= 0
+                                      ? "text-emerald-500"
+                                      : "text-red-500")
+                                  }
+                                >
+                                  {h.returnEur >= 0 ? "+" : ""}
+                                  {fmtEur(h.returnEur)}
+                                </TableCell>
+                                <TableCell
+                                  className={
+                                    "text-right tabular-nums " +
+                                    (h.returnPct >= 0
+                                      ? "text-emerald-500"
+                                      : "text-red-500")
+                                  }
+                                >
+                                  {h.returnPct >= 0 ? "+" : ""}
+                                  {(h.returnPct * 100).toLocaleString("nl-NL", {
+                                    minimumFractionDigits: 1,
+                                    maximumFractionDigits: 1,
+                                  })}
+                                  %
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="tickers" className="mt-4">
+                  {tickers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Click "Compute portfolio" to resolve tickers.
+                    </p>
+                  ) : (
+                    <>
+                      {unresolved.length > 0 && (
+                        <p className="text-sm text-destructive mb-3">
+                          Unresolved ISINs (excluded from valuation):{" "}
+                          {unresolved.map((u) => u.isin).join(", ")}
+                        </p>
+                      )}
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>ISIN</TableHead>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Yahoo ticker</TableHead>
+                              <TableHead>Exchange</TableHead>
+                              <TableHead>Source</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {tickers.map((t) => (
+                              <TableRow key={t.isin}>
+                                <TableCell className="font-mono text-xs">
+                                  {t.isin}
+                                </TableCell>
+                                <TableCell
+                                  className="max-w-[280px] truncate"
+                                  title={t.name ?? ""}
+                                >
+                                  {t.name ?? "—"}
+                                </TableCell>
+                                <TableCell className="font-mono">
+                                  {t.ticker ?? "—"}
+                                </TableCell>
+                                <TableCell>{t.exchange ?? "—"}</TableCell>
+                                <TableCell className="text-muted-foreground">
+                                  {t.source}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="transactions" className="mt-4">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead>ISIN</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead className="text-right">Price</TableHead>
+                          <TableHead>Ccy</TableHead>
+                          <TableHead className="text-right">Total EUR</TableHead>
                         </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </div>
+                      </TableHeader>
+                      <TableBody>
+                        {transactions
+                          .slice()
+                          .reverse()
+                          .map((t, i) => (
+                            <TableRow key={`${t.orderId}-${i}`}>
+                              <TableCell className="whitespace-nowrap">
+                                {t.date}
+                              </TableCell>
+                              <TableCell
+                                className="max-w-[280px] truncate"
+                                title={t.product}
+                              >
+                                {t.product}
+                              </TableCell>
+                              <TableCell className="font-mono text-xs">
+                                {t.isin}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {fmtNum(t.quantity, 0)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {fmtNum(t.price, 4)}
+                              </TableCell>
+                              <TableCell>{t.currency}</TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {fmtNum(t.totalEur)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </TabsContent>
+              </Tabs>
             </CardContent>
           </Card>
         )}

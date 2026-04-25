@@ -174,6 +174,131 @@ export type ValuationInput = {
   currencyByTicker: Map<string, string>;             // yahoo ticker → currency Yahoo reports for it
 };
 
+export type HoldingRow = {
+  isin: string;
+  product: string;
+  ticker: string | null;
+  quantity: number;
+  valueEur: number;        // market value at endDate
+  investedEur: number;     // gross cumulative buy cost (sells don't reduce it)
+  returnEur: number;       // profit change over [startDate, endDate]
+  returnPct: number;       // returnEur as a fraction of capital exposed during the range
+};
+
+/**
+ * Per-ISIN summary at `endDate`, with profit/return scoped to [startDate, endDate].
+ *
+ * `investedEur` is the GROSS cumulative buy cost up to `endDate` — sells do
+ * not reduce it. This matches the question "how much money did I commit to
+ * this stock?". Net cash flow (gross buys minus sell proceeds) is misleading
+ * for closed positions: a stock you bought for €500 and sold for €700 would
+ * otherwise show "invested = −€200", which is nonsense as a denominator.
+ *
+ * `returnEur` is the change in cumulative profit over the window, so fresh
+ * capital deployed inside the window doesn't get counted as profit and sales
+ * outside the window don't get double-counted.
+ *
+ * `returnPct` divides by capital exposed during the range:
+ *   |valueAtStart| (capital still at risk going in) + grossBuysInRange
+ *     (new capital deployed during the window)
+ * This recovers sensible numbers in every case:
+ *   - Closed positions on MAX: 0 + total_gross_buys → return-on-investment
+ *   - Pure hold (no in-range trades): valueAtStart → time-weighted-ish return
+ *   - Mid-range buys: both terms contribute, a capital-weighted return
+ */
+export const computeHoldings = (
+  txs: Transaction[],
+  valuation: ValuationDay[],
+  startDate: string,
+  endDate: string,
+  productByIsin: Map<string, string>,
+  tickerByIsin: Map<string, string>,
+): HoldingRow[] => {
+  if (valuation.length === 0) return [];
+
+  // Net invested (used for profit math): buys add, sells subtract.
+  const netDeltas = new Map<string, Map<string, number>>();
+  // Gross invested (used for the user-facing denominator): buys only.
+  const grossDeltas = new Map<string, Map<string, number>>();
+  for (const t of txs) {
+    let n = netDeltas.get(t.isin);
+    if (!n) {
+      n = new Map();
+      netDeltas.set(t.isin, n);
+    }
+    n.set(t.date, (n.get(t.date) ?? 0) - t.totalEur);
+
+    if (t.quantity > 0) {
+      let g = grossDeltas.get(t.isin);
+      if (!g) {
+        g = new Map();
+        grossDeltas.set(t.isin, g);
+      }
+      g.set(t.date, (g.get(t.date) ?? 0) + Math.abs(t.totalEur));
+    }
+  }
+
+  const cumulativeAt = (
+    bucket: Map<string, Map<string, number>>,
+    isin: string,
+    date: string,
+  ): number => {
+    const deltas = bucket.get(isin);
+    if (!deltas) return 0;
+    let total = 0;
+    for (const [d, v] of deltas) {
+      if (d <= date) total += v;
+    }
+    return total;
+  };
+
+  const endDay = valuation.find((v) => v.date === endDate) ?? valuation[valuation.length - 1];
+  const startDay = valuation.find((v) => v.date === startDate);
+
+  const isins = new Set<string>();
+  for (const t of txs) isins.add(t.isin);
+
+  const qtyAtEnd = new Map<string, number>();
+  for (const t of txs) {
+    if (t.date <= endDate) {
+      qtyAtEnd.set(t.isin, (qtyAtEnd.get(t.isin) ?? 0) + t.quantity);
+    }
+  }
+
+  const rows: HoldingRow[] = [];
+  for (const isin of isins) {
+    const endValue = endDay.perIsinEur[isin] ?? 0;
+    const endNet = cumulativeAt(netDeltas, isin, endDate);
+    const startValue = startDay?.perIsinEur[isin] ?? 0;
+    const startNet = startDay ? cumulativeAt(netDeltas, isin, startDate) : 0;
+    const endGross = cumulativeAt(grossDeltas, isin, endDate);
+    const startGross = startDay ? cumulativeAt(grossDeltas, isin, startDate) : 0;
+
+    const returnEur = endValue - endNet - (startValue - startNet);
+    const grossInRange = Math.max(0, endGross - startGross);
+    const denom = Math.max(0, startValue) + grossInRange;
+    const returnPct = denom > 0 ? returnEur / denom : 0;
+
+    rows.push({
+      isin,
+      product: productByIsin.get(isin) ?? isin,
+      ticker: tickerByIsin.get(isin) ?? null,
+      quantity: qtyAtEnd.get(isin) ?? 0,
+      valueEur: endValue,
+      investedEur: endGross,
+      returnEur,
+      returnPct,
+    });
+  }
+
+  return rows.filter(
+    (r) =>
+      r.quantity !== 0 ||
+      Math.abs(r.returnEur) > 0.01 ||
+      r.investedEur > 0.01,
+  );
+};
+
 export const computeValuation = (input: ValuationInput): ValuationDay[] => {
   const out: ValuationDay[] = [];
   for (const day of input.holdings) {
