@@ -726,7 +726,7 @@ function App() {
                           {mode === "return" && headlineValue >= 0 ? "+" : ""}
                           {fmtEur(headlineValue)}
                         </span>
-                        {rangeChange && (
+                        {rangeChange && rangeStart > earliestDate && (
                           <span
                             className={
                               "text-base tabular-nums " +

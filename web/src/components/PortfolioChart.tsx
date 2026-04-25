@@ -245,7 +245,10 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       } catch {
         /* not all browsers always allow this */
       }
-      e.preventDefault();
+      // Don't preventDefault here — we want the browser to keep evaluating
+      // whether this gesture is a vertical scroll (per touch-action: pan-y).
+      // Once it commits to firing pointermove on us, scrolling is off the
+      // table for that pointer anyway.
     };
 
     const onMove = (e: PointerEvent) => {
@@ -307,7 +310,9 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
     <div
       ref={containerRef}
       className="relative h-[420px] select-none"
-      style={{ touchAction: "none" }}
+      // pan-y lets the browser keep handling vertical page scroll on touch
+      // devices; horizontal gestures fall through to our pointer handlers.
+      style={{ touchAction: "pan-y" }}
     >
       {/* Drag rectangle — imperatively positioned/sized via transform + width. */}
       <div
