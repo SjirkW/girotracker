@@ -151,6 +151,7 @@ function App() {
   });
   const [mode, setMode] = useState<Mode>("return");
   const [privacy, setPrivacy] = useState(false);
+  const [selectedIsin, setSelectedIsin] = useState<string | null>(null);
   const [holdingsQuery, setHoldingsQuery] = useState("");
   const [tickersQuery, setTickersQuery] = useState("");
   const [txQuery, setTxQuery] = useState("");
@@ -287,13 +288,28 @@ function App() {
     );
   }, [transactions, valuation]);
 
+  const investedByDateForSelected = useMemo(() => {
+    if (valuation.length === 0 || !selectedIsin) return new Map<string, number>();
+    return buildDailyInvested(
+      transactions.filter((t) => t.isin === selectedIsin),
+      valuation.map((v) => v.date),
+    );
+  }, [transactions, valuation, selectedIsin]);
+
+  const investedForChart = selectedIsin ? investedByDateForSelected : investedByDate;
+
+  const marketValueForDay = (d: ValuationDay): number =>
+    selectedIsin ? (d.perIsinEur[selectedIsin] ?? 0) : d.totalEur;
+
   const valueForDay = useMemo(
     () => (d: ValuationDay) => {
-      if (mode === "value") return d.totalEur;
-      const invested = investedByDate.get(d.date) ?? 0;
-      return d.totalEur - invested;
+      const market = marketValueForDay(d);
+      if (mode === "value") return market;
+      const invested = investedForChart.get(d.date) ?? 0;
+      return market - invested;
     },
-    [mode, investedByDate],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mode, investedForChart, selectedIsin],
   );
 
   const rangeStart = useMemo(() => {
@@ -313,26 +329,40 @@ function App() {
     [valuation, rangeEnd, latest],
   );
 
-  const rangeData = useMemo(
-    () =>
-      valuation
-        .filter((d) => d.date >= rangeStart && d.date <= rangeEnd)
-        .map((d) => ({ date: d.date, value: Math.round(valueForDay(d)) })),
-    [valuation, rangeStart, rangeEnd, valueForDay],
-  );
+  const stockFirstDate = useMemo(() => {
+    if (!selectedIsin) return null;
+    const dates = transactions
+      .filter((t) => t.isin === selectedIsin)
+      .map((t) => t.date)
+      .sort();
+    return dates[0] ?? null;
+  }, [transactions, selectedIsin]);
+
+  const rangeData = useMemo(() => {
+    const effectiveStart =
+      stockFirstDate && stockFirstDate > rangeStart ? stockFirstDate : rangeStart;
+    return valuation
+      .filter((d) => d.date >= effectiveStart && d.date <= rangeEnd)
+      .map((d) => ({ date: d.date, value: Math.round(valueForDay(d)) }));
+  }, [valuation, rangeStart, rangeEnd, valueForDay, stockFirstDate]);
 
   const rangeChange = useMemo(() => {
-    if (rangeData.length < 2) return null;
-    const start = rangeData[0].value;
-    const end = rangeData[rangeData.length - 1].value;
-    const abs = end - start;
-    const denom =
-      mode === "value"
-        ? start
-        : (investedByDate.get(rangeData[rangeData.length - 1].date) ?? 0);
+    if (rangeData.length < 2 || !endDay) return null;
+    // Anchor to the requested rangeStart (not the trimmed first chart point), so
+    // shares purchased *during* the window are accounted as capital flow rather
+    // than market gains. Without this, the chart's "+€/€%" disagreed with the
+    // holdings table whenever a position was opened mid-window.
+    const startDay = valuation.find((v) => v.date === rangeStart);
+    const startMarket = startDay ? marketValueForDay(startDay) : 0;
+    const endMarket = marketValueForDay(endDay);
+    const startInvested = investedForChart.get(rangeStart) ?? 0;
+    const endInvested = investedForChart.get(endDay.date) ?? 0;
+    const abs = endMarket - startMarket - (endInvested - startInvested);
+    const denom = mode === "value" ? startMarket || endInvested : endInvested;
     const pct = denom !== 0 ? abs / Math.abs(denom) : 0;
-    return { abs, pct, start, end };
-  }, [rangeData, mode, investedByDate]);
+    return { abs, pct, start: startMarket, end: endMarket };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valuation, rangeStart, endDay, mode, investedForChart, selectedIsin]);
 
   const headlineValue = endDay ? valueForDay(endDay) : 0;
 
@@ -591,14 +621,35 @@ function App() {
         {valuation.length > 0 && latest && (
           <Card>
             <CardHeader>
-              <CardTitle>Portfolio value over time</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <span>
+                  {selectedIsin
+                    ? `${productByIsin.get(selectedIsin) ?? selectedIsin} over time`
+                    : "Portfolio value over time"}
+                </span>
+                {selectedIsin && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setSelectedIsin(null)}
+                  >
+                    ← Back to portfolio
+                  </Button>
+                )}
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
                   <div className="text-sm text-muted-foreground">
-                    {mode === "return" ? "Total return" : "Portfolio value"} (
-                    {endDay?.date ?? latest.date})
+                    {selectedIsin
+                      ? mode === "return"
+                        ? "Stock return"
+                        : "Stock value"
+                      : mode === "return"
+                        ? "Total return"
+                        : "Portfolio value"}{" "}
+                    ({endDay?.date ?? latest.date})
                   </div>
                   <div className="flex items-baseline gap-3">
                     {privacy ? (
@@ -643,8 +694,9 @@ function App() {
                   </div>
                   {!privacy && mode === "return" && endDay && (
                     <div className="text-xs text-muted-foreground mt-1 tabular-nums">
-                      Capital invested: {fmtEur(investedByDate.get(endDay.date) ?? 0)} ·
-                      Market value: {fmtEur(endDay.totalEur)}
+                      Capital invested:{" "}
+                      {fmtEur(investedForChart.get(endDay.date) ?? 0)} · Market value:{" "}
+                      {fmtEur(marketValueForDay(endDay))}
                     </div>
                   )}
                 </div>
@@ -809,7 +861,18 @@ function App() {
                           </TableHeader>
                           <TableBody>
                             {sortedHoldings.map((h) => (
-                              <TableRow key={h.isin}>
+                              <TableRow
+                                key={h.isin}
+                                onClick={() =>
+                                  setSelectedIsin((prev) =>
+                                    prev === h.isin ? null : h.isin,
+                                  )
+                                }
+                                className={
+                                  "cursor-pointer " +
+                                  (selectedIsin === h.isin ? "bg-muted/60" : "")
+                                }
+                              >
                                 <TableCell
                                   className="max-w-[280px] truncate"
                                   title={h.product}
