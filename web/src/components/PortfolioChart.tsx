@@ -1,11 +1,10 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
   LineChart,
   ReferenceArea,
   ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
@@ -23,12 +22,6 @@ type Props = {
   pctDenomByDate?: Map<string, number>;
 };
 
-/**
- * Self-contained chart with Google-style drag-to-inspect. The drag selection
- * state lives here so chart movement doesn't re-render the parent App (and
- * its Holdings/Transactions tables, which would otherwise tank performance
- * on every mouse move).
- */
 // Recharts re-paints every data point on every state change, so 1800+ daily
 // points on a ~1000px chart make drag interactions janky. Sub-pixel detail
 // is invisible anyway — decimate to ~MAX_POINTS by uniform sampling, always
@@ -46,6 +39,16 @@ const decimate = (data: ChartPoint[]): ChartPoint[] => {
   return out;
 };
 
+/**
+ * Self-contained chart with Google-style drag-to-inspect. The drag selection
+ * state lives here so chart movement doesn't re-render the parent App.
+ *
+ * For hover, we bypass React entirely: a vertical cursor line and tooltip
+ * card live as plain DOM elements, repositioned via `transform: translate3d`
+ * on every mouse move. No state changes, no recharts re-paint, no React
+ * reconciliation. The browser promotes the elements to GPU layers so the
+ * compositor handles the movement at native frame rate.
+ */
 function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
   const [dragSel, setDragSel] = useState<{
     startDate: string;
@@ -54,6 +57,13 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
   const dragging = useRef(false);
   const rafPending = useRef(false);
   const pendingLabel = useRef<string | null>(null);
+
+  // Refs for the imperative hover overlay.
+  const cursorRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const tooltipDateRef = useRef<HTMLDivElement>(null);
+  const tooltipValueRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const chartData = useMemo(() => decimate(data), [data]);
 
@@ -83,8 +93,101 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
     });
   };
 
+  // Keep latest props/data accessible from native mouse handlers without
+  // re-binding listeners on every render.
+  const chartDataRef = useRef(chartData);
+  chartDataRef.current = chartData;
+  const privacyRef = useRef(privacy);
+  privacyRef.current = privacy;
+  const fmtEurRef = useRef(fmtEur);
+  fmtEurRef.current = fmtEur;
+
+  const hideHoverOverlay = () => {
+    if (cursorRef.current) cursorRef.current.style.opacity = "0";
+    if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
+  };
+
+  // Native mouse listener: bypasses recharts entirely for hover, so no SVG
+  // re-paint and no React reconciliation. We compute the data index from the
+  // pixel x using the chart's known layout (left padding = YAxis width,
+  // right padding = LineChart margin.right).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onMove = (e: MouseEvent) => {
+      const dataset = chartDataRef.current;
+      if (dataset.length === 0) return;
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const yAxisWidth = privacyRef.current ? 0 : 72;
+      const plotLeft = yAxisWidth;
+      const plotRight = rect.width - 16; // matches LineChart margin.right
+      const plotWidth = plotRight - plotLeft;
+      if (x < plotLeft || x > plotRight || plotWidth <= 0) {
+        hideHoverOverlay();
+        return;
+      }
+      const ratio = (x - plotLeft) / plotWidth;
+      const idx = Math.min(
+        dataset.length - 1,
+        Math.max(0, Math.round(ratio * (dataset.length - 1))),
+      );
+      const point = dataset[idx];
+      const snappedX = plotLeft + (idx / Math.max(1, dataset.length - 1)) * plotWidth;
+
+      if (cursorRef.current) {
+        cursorRef.current.style.transform = `translate3d(${snappedX}px, 0, 0)`;
+        cursorRef.current.style.opacity = "1";
+      }
+      if (tooltipRef.current) {
+        const cw = container.clientWidth;
+        const tw = tooltipRef.current.offsetWidth || 160;
+        const tx = snappedX + tw + 12 > cw ? snappedX - tw - 8 : snappedX + 8;
+        tooltipRef.current.style.transform = `translate3d(${tx}px, 0, 0)`;
+        tooltipRef.current.style.opacity = "1";
+      }
+      if (tooltipDateRef.current) tooltipDateRef.current.textContent = point.date;
+      if (tooltipValueRef.current) {
+        tooltipValueRef.current.textContent = privacyRef.current
+          ? "•••"
+          : fmtEurRef.current(point.value);
+      }
+    };
+
+    container.addEventListener("mousemove", onMove);
+    container.addEventListener("mouseleave", hideHoverOverlay);
+    return () => {
+      container.removeEventListener("mousemove", onMove);
+      container.removeEventListener("mouseleave", hideHoverOverlay);
+    };
+  }, []);
+
   return (
-    <div className="relative h-[420px] select-none">
+    <div ref={containerRef} className="relative h-[420px] select-none">
+      {/* Imperatively-updated cursor line — never re-renders via React. */}
+      <div
+        ref={cursorRef}
+        className="absolute top-0 bottom-6 w-px bg-foreground/40 pointer-events-none opacity-0"
+        style={{
+          left: 0,
+          transform: "translate3d(0,0,0)",
+          willChange: "transform, opacity",
+        }}
+      />
+      {/* Imperatively-updated tooltip card. */}
+      <div
+        ref={tooltipRef}
+        className="absolute top-2 left-0 pointer-events-none opacity-0 rounded-md border bg-popover/95 backdrop-blur px-2.5 py-1.5 shadow-sm text-xs tabular-nums"
+        style={{
+          transform: "translate3d(0,0,0)",
+          willChange: "transform, opacity",
+        }}
+      >
+        <div ref={tooltipDateRef} className="text-muted-foreground" />
+        <div ref={tooltipValueRef} className="font-medium" />
+      </div>
+
       {dragStats && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none rounded-md border bg-popover/95 backdrop-blur px-3 py-1.5 shadow-sm text-xs tabular-nums flex items-center gap-2">
           <span className="text-muted-foreground">
@@ -123,14 +226,12 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
           onMouseMove={(e) => {
             if (!dragging.current || !e?.activeLabel) return;
             pendingLabel.current = String(e.activeLabel);
-            // Coalesce mouse moves into one update per frame.
             if (rafPending.current) return;
             rafPending.current = true;
             requestAnimationFrame(flushPending);
           }}
           onMouseUp={() => {
             dragging.current = false;
-            // A click without a drag (start === end) clears the selection.
             setDragSel((prev) =>
               prev && prev.startDate === prev.endDate ? null : prev,
             );
@@ -153,17 +254,6 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
                 : new Intl.NumberFormat("nl-NL", { notation: "compact" }).format(v)
             }
             width={privacy ? 0 : 72}
-          />
-          <Tooltip
-            contentStyle={{
-              background: "var(--popover)",
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              color: "var(--popover-foreground)",
-            }}
-            formatter={(v) => (privacy ? "•••" : fmtEur(Number(v)))}
-            labelStyle={{ color: "var(--muted-foreground)" }}
-            isAnimationActive={false}
           />
           {dragStats && (
             <ReferenceArea

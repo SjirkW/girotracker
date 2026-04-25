@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PortfolioChart } from "@/components/PortfolioChart";
 import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,33 @@ const fmtEur = (n: number) =>
   });
 
 const today = (): string => new Date().toISOString().slice(0, 10);
+
+const STORAGE_KEY = "girotracker:session:v1";
+
+type PersistedSession = {
+  fileName: string | null;
+  transactions: Transaction[];
+  tickers: TickerLookupResult[];
+  valuation: ValuationDay[];
+};
+
+const loadSession = (): PersistedSession | null => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedSession;
+  } catch {
+    return null;
+  }
+};
+
+const saveSession = (s: PersistedSession): void => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  } catch {
+    // Quota exceeded or storage unavailable — fail silently.
+  }
+};
 
 const MODES = [
   { id: "return", label: "Return" },
@@ -128,6 +155,34 @@ function App() {
   const [holdingsQuery, setHoldingsQuery] = useState("");
   const [tickersQuery, setTickersQuery] = useState("");
   const [txQuery, setTxQuery] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+
+  // Restore previous session on first mount.
+  useEffect(() => {
+    const s = loadSession();
+    if (s) {
+      setFileName(s.fileName);
+      setTransactions(s.transactions ?? []);
+      setTickers(s.tickers ?? []);
+      setValuation(s.valuation ?? []);
+      if (s.valuation && s.valuation.length > 0) setStatus({ phase: "done" });
+    }
+    setHydrated(true);
+  }, []);
+
+  // Persist session whenever the meaningful pieces change (after initial hydration).
+  useEffect(() => {
+    if (!hydrated) return;
+    if (transactions.length === 0 && !fileName) {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    saveSession({ fileName, transactions, tickers, valuation });
+  }, [hydrated, fileName, transactions, tickers, valuation]);
 
   const fmtPct = (p: number) =>
     `${p >= 0 ? "+" : ""}${(p * 100).toLocaleString("nl-NL", {
