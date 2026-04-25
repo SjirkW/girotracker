@@ -3,6 +3,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -136,6 +137,11 @@ function App() {
   const [holdingsQuery, setHoldingsQuery] = useState("");
   const [tickersQuery, setTickersQuery] = useState("");
   const [txQuery, setTxQuery] = useState("");
+  const [dragSel, setDragSel] = useState<{
+    startDate: string;
+    endDate: string;
+  } | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   const fmtPct = (p: number) =>
     `${p >= 0 ? "+" : ""}${(p * 100).toLocaleString("nl-NL", {
@@ -356,6 +362,22 @@ function App() {
   }, [valuation, rangeStart, endDay, mode, investedForChart, selectedIsin]);
 
   const headlineValue = endDay ? valueForDay(endDay) : 0;
+
+  // Drag-to-select on the chart: report the delta and % change between the two
+  // anchor dates without affecting the chart's range.
+  const dragStats = useMemo(() => {
+    if (!dragSel || dragSel.startDate === dragSel.endDate) return null;
+    const [a, b] =
+      dragSel.startDate <= dragSel.endDate
+        ? [dragSel.startDate, dragSel.endDate]
+        : [dragSel.endDate, dragSel.startDate];
+    const startEntry = rangeData.find((d) => d.date === a);
+    const endEntry = rangeData.find((d) => d.date === b);
+    if (!startEntry || !endEntry) return null;
+    const abs = endEntry.value - startEntry.value;
+    const pct = startEntry.value !== 0 ? abs / Math.abs(startEntry.value) : 0;
+    return { from: a, to: b, abs, pct };
+  }, [dragSel, rangeData]);
 
   const productByIsin = useMemo(() => {
     const m = new Map<string, string>();
@@ -729,9 +751,63 @@ function App() {
                   />
                 </div>
               </div>
-              <div className="h-[420px]">
+              <div className="relative h-[420px] select-none">
+                {dragStats && (
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none rounded-md border bg-popover/95 backdrop-blur px-3 py-1.5 shadow-sm text-xs tabular-nums flex items-center gap-2">
+                    <span className="text-muted-foreground">{dragStats.from} → {dragStats.to}</span>
+                    <span
+                      className={
+                        dragStats.abs >= 0 ? "text-emerald-500" : "text-red-500"
+                      }
+                    >
+                      {dragStats.abs >= 0 ? "+" : ""}
+                      {fmtEur(dragStats.abs)}
+                      {" ("}
+                      {dragStats.abs >= 0 ? "+" : ""}
+                      {(dragStats.pct * 100).toLocaleString("nl-NL", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                      %)
+                    </span>
+                    <button
+                      onClick={() => setDragSel(null)}
+                      className="pointer-events-auto text-muted-foreground hover:text-foreground ml-1"
+                      title="Clear selection"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={rangeData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+                  <LineChart
+                    data={rangeData}
+                    margin={{ top: 8, right: 16, bottom: 0, left: 0 }}
+                    onMouseDown={(e) => {
+                      if (!e?.activeLabel) return;
+                      setDragSel({
+                        startDate: String(e.activeLabel),
+                        endDate: String(e.activeLabel),
+                      });
+                      setDragging(true);
+                    }}
+                    onMouseMove={(e) => {
+                      if (!dragging || !e?.activeLabel) return;
+                      setDragSel((prev) =>
+                        prev
+                          ? { ...prev, endDate: String(e.activeLabel) }
+                          : prev,
+                      );
+                    }}
+                    onMouseUp={() => {
+                      setDragging(false);
+                      // A click without a drag (start === end) clears the selection.
+                      setDragSel((prev) =>
+                        prev && prev.startDate === prev.endDate ? null : prev,
+                      );
+                    }}
+                    onMouseLeave={() => setDragging(false)}
+                  >
                     <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
                     <XAxis
                       dataKey="date"
@@ -757,6 +833,17 @@ function App() {
                       formatter={(v) => (privacy ? "•••" : fmtEur(Number(v)))}
                       labelStyle={{ color: "var(--muted-foreground)" }}
                     />
+                    {dragStats && (
+                      <ReferenceArea
+                        x1={dragStats.from}
+                        x2={dragStats.to}
+                        fill="var(--primary)"
+                        fillOpacity={0.12}
+                        stroke="var(--primary)"
+                        strokeOpacity={0.4}
+                        ifOverflow="visible"
+                      />
+                    )}
                     <Line
                       type="monotone"
                       dataKey="value"
