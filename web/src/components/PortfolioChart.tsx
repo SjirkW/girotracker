@@ -3,7 +3,6 @@ import {
   CartesianGrid,
   Line,
   LineChart,
-  ReferenceArea,
   ResponsiveContainer,
   XAxis,
   YAxis,
@@ -23,8 +22,8 @@ type Props = {
 };
 
 // Recharts re-paints every data point on every state change, so 1800+ daily
-// points on a ~1000px chart make drag interactions janky. Sub-pixel detail
-// is invisible anyway — decimate to ~MAX_POINTS by uniform sampling, always
+// points on a ~1000px chart make drag interactions janky. Sub-pixel detail is
+// invisible anyway — decimate to ~MAX_POINTS by uniform sampling, always
 // keeping the first and last point.
 const MAX_POINTS = 600;
 const decimate = (data: ChartPoint[]): ChartPoint[] => {
@@ -40,101 +39,104 @@ const decimate = (data: ChartPoint[]): ChartPoint[] => {
 };
 
 /**
- * Self-contained chart with Google-style drag-to-inspect. The drag selection
- * state lives here so chart movement doesn't re-render the parent App.
+ * Self-contained chart with Google-style drag-to-inspect.
  *
- * For hover, we bypass React entirely: a vertical cursor line and tooltip
- * card live as plain DOM elements, repositioned via `transform: translate3d`
- * on every mouse move. No state changes, no recharts re-paint, no React
- * reconciliation. The browser promotes the elements to GPU layers so the
- * compositor handles the movement at native frame rate.
+ * Hover and drag both bypass React entirely — they're handled by native DOM
+ * mouse listeners that update plain `<div>` overlays via `transform: translate3d`
+ * and `width`. The chart's SVG never re-paints during interaction; the only
+ * React state change is the boolean that toggles the post-drag close button.
+ *
+ * Plot-area math: the YAxis on the left takes `yAxisWidth` px, and the
+ * LineChart's `margin.right` reserves 16 px on the right. Everything in
+ * between is the data area, which we use to map pixel x ↔ data index.
  */
 function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
-  const [dragSel, setDragSel] = useState<{
-    startDate: string;
-    endDate: string;
-  } | null>(null);
-  const dragging = useRef(false);
-  const rafPending = useRef(false);
-  const pendingLabel = useRef<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Refs for the imperative hover overlay.
+  // Hover overlay refs.
   const cursorRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const tooltipDateRef = useRef<HTMLDivElement>(null);
   const tooltipValueRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Drag overlay refs.
+  const dragRectRef = useRef<HTMLDivElement>(null);
+  const dragLabelRef = useRef<HTMLDivElement>(null);
+  const dragLabelDateRef = useRef<HTMLSpanElement>(null);
+  const dragLabelDeltaRef = useRef<HTMLSpanElement>(null);
+
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef<number | null>(null);
+
+  // Boolean state — flipped only on mouseup, so React renders just once
+  // after the entire drag (to show the ✕ button).
+  const [hasSelection, setHasSelection] = useState(false);
 
   const chartData = useMemo(() => decimate(data), [data]);
 
-  const dragStats = useMemo(() => {
-    if (!dragSel || dragSel.startDate === dragSel.endDate) return null;
-    const [a, b] =
-      dragSel.startDate <= dragSel.endDate
-        ? [dragSel.startDate, dragSel.endDate]
-        : [dragSel.endDate, dragSel.startDate];
-    const startEntry = chartData.find((d) => d.date === a);
-    const endEntry = chartData.find((d) => d.date === b);
-    if (!startEntry || !endEntry) return null;
-    const abs = endEntry.value - startEntry.value;
-    const overrideDenom = pctDenomByDate?.get(b);
-    const denom = overrideDenom != null ? Math.abs(overrideDenom) : Math.abs(startEntry.value);
-    const pct = denom !== 0 ? abs / denom : 0;
-    return { from: a, to: b, abs, pct };
-  }, [dragSel, chartData, pctDenomByDate]);
-
-  const flushPending = () => {
-    rafPending.current = false;
-    const lbl = pendingLabel.current;
-    if (!lbl) return;
-    setDragSel((prev) => {
-      if (!prev || prev.endDate === lbl) return prev;
-      return { ...prev, endDate: lbl };
-    });
-  };
-
-  // Keep latest props/data accessible from native mouse handlers without
-  // re-binding listeners on every render.
+  // Refs for current props/data so the (one-time-bound) DOM listeners can
+  // read the latest values without being re-attached on every render.
   const chartDataRef = useRef(chartData);
   chartDataRef.current = chartData;
   const privacyRef = useRef(privacy);
   privacyRef.current = privacy;
   const fmtEurRef = useRef(fmtEur);
   fmtEurRef.current = fmtEur;
+  const pctDenomRef = useRef(pctDenomByDate);
+  pctDenomRef.current = pctDenomByDate;
 
-  const hideHoverOverlay = () => {
+  const hideHover = () => {
     if (cursorRef.current) cursorRef.current.style.opacity = "0";
     if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
   };
 
-  // Native mouse listener: bypasses recharts entirely for hover, so no SVG
-  // re-paint and no React reconciliation. We compute the data index from the
-  // pixel x using the chart's known layout (left padding = YAxis width,
-  // right padding = LineChart margin.right).
+  const clearSelection = () => {
+    if (dragRectRef.current) dragRectRef.current.style.opacity = "0";
+    if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
+    setHasSelection(false);
+  };
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const onMove = (e: MouseEvent) => {
-      const dataset = chartDataRef.current;
-      if (dataset.length === 0) return;
+    const layout = () => {
       const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
       const yAxisWidth = privacyRef.current ? 0 : 72;
       const plotLeft = yAxisWidth;
-      const plotRight = rect.width - 16; // matches LineChart margin.right
-      const plotWidth = plotRight - plotLeft;
-      if (x < plotLeft || x > plotRight || plotWidth <= 0) {
-        hideHoverOverlay();
-        return;
-      }
+      const plotRight = rect.width - 16;
+      const plotWidth = Math.max(1, plotRight - plotLeft);
+      return { rect, plotLeft, plotRight, plotWidth };
+    };
+
+    const xToIdx = (x: number, plotLeft: number, plotWidth: number) => {
+      const dataset = chartDataRef.current;
+      if (dataset.length === 0) return 0;
       const ratio = (x - plotLeft) / plotWidth;
-      const idx = Math.min(
+      return Math.min(
         dataset.length - 1,
         Math.max(0, Math.round(ratio * (dataset.length - 1))),
       );
+    };
+
+    const idxToX = (idx: number, plotLeft: number, plotWidth: number) => {
+      const n = Math.max(1, chartDataRef.current.length - 1);
+      return plotLeft + (idx / n) * plotWidth;
+    };
+
+    const showHover = (e: MouseEvent) => {
+      if (isDraggingRef.current) return;
+      const dataset = chartDataRef.current;
+      if (dataset.length === 0) return;
+      const { rect, plotLeft, plotRight, plotWidth } = layout();
+      const x = e.clientX - rect.left;
+      if (x < plotLeft || x > plotRight) {
+        hideHover();
+        return;
+      }
+      const idx = xToIdx(x, plotLeft, plotWidth);
       const point = dataset[idx];
-      const snappedX = plotLeft + (idx / Math.max(1, dataset.length - 1)) * plotWidth;
+      const snappedX = idxToX(idx, plotLeft, plotWidth);
 
       if (cursorRef.current) {
         cursorRef.current.style.transform = `translate3d(${snappedX}px, 0, 0)`;
@@ -155,17 +157,145 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       }
     };
 
-    container.addEventListener("mousemove", onMove);
-    container.addEventListener("mouseleave", hideHoverOverlay);
-    return () => {
-      container.removeEventListener("mousemove", onMove);
-      container.removeEventListener("mouseleave", hideHoverOverlay);
+    const updateDragVisuals = (snappedX: number, e?: MouseEvent) => {
+      const sx = dragStartXRef.current;
+      if (sx == null) return;
+      const x1 = Math.min(sx, snappedX);
+      const x2 = Math.max(sx, snappedX);
+      const w = x2 - x1;
+      if (dragRectRef.current) {
+        dragRectRef.current.style.transform = `translate3d(${x1}px, 0, 0)`;
+        dragRectRef.current.style.width = `${w}px`;
+        dragRectRef.current.style.opacity = w > 0 ? "1" : "0";
+      }
+      if (w <= 0) {
+        if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
+        return;
+      }
+      const { plotLeft, plotWidth } = layout();
+      const startIdx = xToIdx(x1, plotLeft, plotWidth);
+      const endIdx = xToIdx(x2, plotLeft, plotWidth);
+      const startPoint = chartDataRef.current[startIdx];
+      const endPoint = chartDataRef.current[endIdx];
+      if (!startPoint || !endPoint) return;
+      const abs = endPoint.value - startPoint.value;
+      const overrideDenom = pctDenomRef.current?.get(endPoint.date);
+      const denom =
+        overrideDenom != null ? Math.abs(overrideDenom) : Math.abs(startPoint.value);
+      const pct = denom > 0 ? abs / denom : 0;
+
+      if (dragLabelDateRef.current) {
+        dragLabelDateRef.current.textContent = `${startPoint.date} → ${endPoint.date}`;
+      }
+      if (dragLabelDeltaRef.current) {
+        const sign = abs >= 0 ? "+" : "";
+        const pctStr = (pct * 100).toLocaleString("nl-NL", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        dragLabelDeltaRef.current.textContent = `${sign}${fmtEurRef.current(abs)} (${sign}${pctStr}%)`;
+        dragLabelDeltaRef.current.style.color =
+          abs >= 0 ? "rgb(16 185 129)" : "rgb(239 68 68)";
+      }
+      if (dragLabelRef.current) dragLabelRef.current.style.opacity = "1";
+      // Reference the event so eslint doesn't complain about unused param.
+      void e;
     };
+
+    const onDown = (e: MouseEvent) => {
+      const { rect, plotLeft, plotRight, plotWidth } = layout();
+      const x = e.clientX - rect.left;
+      if (x < plotLeft || x > plotRight) return;
+      const idx = xToIdx(x, plotLeft, plotWidth);
+      const snappedX = idxToX(idx, plotLeft, plotWidth);
+      isDraggingRef.current = true;
+      dragStartXRef.current = snappedX;
+      hideHover();
+      // Reset visuals
+      if (dragRectRef.current) {
+        dragRectRef.current.style.transform = `translate3d(${snappedX}px, 0, 0)`;
+        dragRectRef.current.style.width = "0px";
+        dragRectRef.current.style.opacity = "0";
+      }
+      if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
+      // If a previous selection was committed, drop the close button.
+      if (hasSelection) setHasSelection(false);
+      e.preventDefault();
+    };
+
+    const onMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) {
+        showHover(e);
+        return;
+      }
+      const { rect, plotLeft, plotRight, plotWidth } = layout();
+      const x = Math.max(plotLeft, Math.min(plotRight, e.clientX - rect.left));
+      const idx = xToIdx(x, plotLeft, plotWidth);
+      const snappedX = idxToX(idx, plotLeft, plotWidth);
+      updateDragVisuals(snappedX, e);
+    };
+
+    const onUp = () => {
+      if (!isDraggingRef.current) return;
+      isDraggingRef.current = false;
+      const w = dragRectRef.current?.offsetWidth ?? 0;
+      if (w < 2) {
+        // Click without drag — clear.
+        clearSelection();
+      } else {
+        setHasSelection(true);
+      }
+    };
+
+    // Listen on window for move/up so the drag survives the cursor leaving
+    // the chart bounds.
+    container.addEventListener("mousedown", onDown);
+    container.addEventListener("mouseleave", () => {
+      if (!isDraggingRef.current) hideHover();
+    });
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      container.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <div ref={containerRef} className="relative h-[420px] select-none">
-      {/* Imperatively-updated cursor line — never re-renders via React. */}
+      {/* Drag rectangle — imperatively positioned/sized via transform + width. */}
+      <div
+        ref={dragRectRef}
+        className="absolute top-0 bottom-6 left-0 pointer-events-none opacity-0 bg-primary/15 border-l border-r border-primary/50"
+        style={{
+          width: 0,
+          transform: "translate3d(0,0,0)",
+          willChange: "transform, width, opacity",
+        }}
+      />
+      {/* Drag label — imperatively updated text. */}
+      <div
+        ref={dragLabelRef}
+        className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none rounded-md border bg-popover/95 backdrop-blur px-3 py-1.5 shadow-sm text-xs tabular-nums opacity-0 flex items-center gap-2"
+        style={{ willChange: "opacity" }}
+      >
+        <span ref={dragLabelDateRef} className="text-muted-foreground" />
+        <span ref={dragLabelDeltaRef} />
+      </div>
+      {hasSelection && (
+        <button
+          onClick={clearSelection}
+          className="absolute top-2.5 z-20 text-muted-foreground hover:text-foreground text-xs"
+          style={{ left: "calc(50% + 110px)" }}
+          title="Clear selection"
+        >
+          ✕
+        </button>
+      )}
+
+      {/* Hover cursor — never re-renders. */}
       <div
         ref={cursorRef}
         className="absolute top-0 bottom-6 w-px bg-foreground/40 pointer-events-none opacity-0"
@@ -175,7 +305,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
           willChange: "transform, opacity",
         }}
       />
-      {/* Imperatively-updated tooltip card. */}
+      {/* Hover tooltip — never re-renders. */}
       <div
         ref={tooltipRef}
         className="absolute top-2 left-0 pointer-events-none opacity-0 rounded-md border bg-popover/95 backdrop-blur px-2.5 py-1.5 shadow-sm text-xs tabular-nums"
@@ -188,57 +318,10 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
         <div ref={tooltipValueRef} className="font-medium" />
       </div>
 
-      {dragStats && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 pointer-events-none rounded-md border bg-popover/95 backdrop-blur px-3 py-1.5 shadow-sm text-xs tabular-nums flex items-center gap-2">
-          <span className="text-muted-foreground">
-            {dragStats.from} → {dragStats.to}
-          </span>
-          <span className={dragStats.abs >= 0 ? "text-emerald-500" : "text-red-500"}>
-            {dragStats.abs >= 0 ? "+" : ""}
-            {fmtEur(dragStats.abs)}
-            {" ("}
-            {dragStats.abs >= 0 ? "+" : ""}
-            {(dragStats.pct * 100).toLocaleString("nl-NL", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-            %)
-          </span>
-          <button
-            onClick={() => setDragSel(null)}
-            className="pointer-events-auto text-muted-foreground hover:text-foreground ml-1"
-            title="Clear selection"
-          >
-            ✕
-          </button>
-        </div>
-      )}
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={chartData}
           margin={{ top: 8, right: 16, bottom: 0, left: 0 }}
-          onMouseDown={(e) => {
-            if (!e?.activeLabel) return;
-            const lbl = String(e.activeLabel);
-            setDragSel({ startDate: lbl, endDate: lbl });
-            dragging.current = true;
-          }}
-          onMouseMove={(e) => {
-            if (!dragging.current || !e?.activeLabel) return;
-            pendingLabel.current = String(e.activeLabel);
-            if (rafPending.current) return;
-            rafPending.current = true;
-            requestAnimationFrame(flushPending);
-          }}
-          onMouseUp={() => {
-            dragging.current = false;
-            setDragSel((prev) =>
-              prev && prev.startDate === prev.endDate ? null : prev,
-            );
-          }}
-          onMouseLeave={() => {
-            dragging.current = false;
-          }}
         >
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
           <XAxis
@@ -255,17 +338,6 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
             }
             width={privacy ? 0 : 72}
           />
-          {dragStats && (
-            <ReferenceArea
-              x1={dragStats.from}
-              x2={dragStats.to}
-              fill="var(--primary)"
-              fillOpacity={0.12}
-              stroke="var(--primary)"
-              strokeOpacity={0.4}
-              ifOverflow="visible"
-            />
-          )}
           <Line
             type="linear"
             dataKey="value"
