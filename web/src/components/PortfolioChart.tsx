@@ -121,7 +121,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       return plotLeft + (idx / n) * plotWidth;
     };
 
-    const showHover = (e: MouseEvent) => {
+    const showHover = (e: PointerEvent) => {
       if (isDraggingRef.current) return;
       const dataset = chartDataRef.current;
       if (dataset.length === 0) return;
@@ -154,7 +154,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       }
     };
 
-    const updateDragVisuals = (snappedX: number, e?: MouseEvent) => {
+    const updateDragVisuals = (snappedX: number, e?: PointerEvent) => {
       const sx = dragStartXRef.current;
       if (sx == null) return;
       const x1 = Math.min(sx, snappedX);
@@ -199,7 +199,9 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       void e;
     };
 
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
+      // Touch sometimes triggers a hover — ignore non-primary buttons for mouse.
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       const { rect, plotLeft, plotRight, plotWidth } = layout();
       const x = e.clientX - rect.left;
       if (x < plotLeft || x > plotRight) return;
@@ -208,7 +210,6 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       isDraggingRef.current = true;
       dragStartXRef.current = snappedX;
       hideHover();
-      // Reset visuals — start with the rectangle hidden (zero width).
       if (dragRectRef.current) {
         dragRectRef.current.style.transform = `translate3d(${snappedX}px, 0, 0)`;
         dragRectRef.current.style.width = "0px";
@@ -216,12 +217,21 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       }
       if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
       hasRectRef.current = false;
+      // Capture the pointer so we keep getting events even if the finger /
+      // mouse leaves the chart bounds during the drag.
+      try {
+        container.setPointerCapture(e.pointerId);
+      } catch {
+        /* not all browsers always allow this */
+      }
       e.preventDefault();
     };
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       if (!isDraggingRef.current) {
-        showHover(e);
+        // Hover preview only for mouse / pen; touch shouldn't show a hover
+        // tooltip without an active drag.
+        if (e.pointerType !== "touch") showHover(e);
         return;
       }
       const { rect, plotLeft, plotRight, plotWidth } = layout();
@@ -229,41 +239,49 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       const idx = xToIdx(x, plotLeft, plotWidth);
       const snappedX = idxToX(idx, plotLeft, plotWidth);
       updateDragVisuals(snappedX, e);
+      // Stop the page from scrolling while dragging on touch devices.
+      e.preventDefault();
     };
 
-    const onUp = () => {
+    const onUp = (e: PointerEvent) => {
       if (!isDraggingRef.current) return;
       isDraggingRef.current = false;
+      try {
+        container.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
       const w = dragRectRef.current?.offsetWidth ?? 0;
       if (w < 2) {
-        // Click without drag — clear any prior selection.
         clearSelection();
         return;
       }
-      // Drag finished: keep the rectangle as a visual indicator, but hide the
-      // floating label so it stops colliding with the hover tooltip.
       hasRectRef.current = true;
       if (dragLabelRef.current) dragLabelRef.current.style.opacity = "0";
     };
 
-    // Listen on window for move/up so the drag survives the cursor leaving
-    // the chart bounds.
-    container.addEventListener("mousedown", onDown);
-    container.addEventListener("mouseleave", () => {
+    container.addEventListener("pointerdown", onDown);
+    container.addEventListener("pointerleave", () => {
       if (!isDraggingRef.current) hideHover();
     });
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    container.addEventListener("pointermove", onMove);
+    container.addEventListener("pointerup", onUp);
+    container.addEventListener("pointercancel", onUp);
     return () => {
-      container.removeEventListener("mousedown", onDown);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      container.removeEventListener("pointerdown", onDown);
+      container.removeEventListener("pointermove", onMove);
+      container.removeEventListener("pointerup", onUp);
+      container.removeEventListener("pointercancel", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <div ref={containerRef} className="relative h-[420px] select-none">
+    <div
+      ref={containerRef}
+      className="relative h-[420px] select-none"
+      style={{ touchAction: "none" }}
+    >
       {/* Drag rectangle — imperatively positioned/sized via transform + width. */}
       <div
         ref={dragRectRef}
