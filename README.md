@@ -56,3 +56,29 @@ rm server/data/cache.db
 ```
 
 The server will recreate the schema on next start.
+
+## Deploying to Cloudflare Pages (free)
+
+Production runs on **Cloudflare Pages** (static frontend) + **Pages Functions** (the `/api/*` routes), which together stay inside the free tier indefinitely. The local Express server keeps working unchanged for development; Pages Functions live in `web/functions/` and are deployed only with the Pages build.
+
+There is no server-side cache in production — the Pages Functions proxy directly to Yahoo and OpenFIGI on every call. Your CSV, parsed transactions, and computed valuation are persisted in the browser's `localStorage`, so reloads don't re-trigger upstream calls.
+
+### One-time setup
+
+1. Install Wrangler if you don't have it: `npm i -g wrangler && wrangler login`.
+2. From `web/`, create a Pages project linked to your GitHub repo (or run `wrangler pages deploy dist` after the first manual `npm run build`).
+3. In the Cloudflare dashboard set the project's **Build settings**:
+   - Root directory: `web`
+   - Build command: `npm install && npm run build`
+   - Build output directory: `dist`
+4. Optional: under **Settings → Environment variables**, add `OPENFIGI_API_KEY` for faster ISIN resolution.
+
+### Local preview of the production setup
+
+```bash
+cd web
+npm run build
+npx wrangler pages dev dist
+```
+
+This serves both the static SPA and the Functions on a single localhost port — useful for verifying the Cloudflare runtime before pushing.
