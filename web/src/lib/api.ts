@@ -12,6 +12,12 @@ export type PricePoint = {
   currency: string | null;
 };
 
+export type PriceBatchResult = {
+  ticker: string;
+  prices: PricePoint[];
+  error?: string;
+};
+
 const json = async <T>(res: Response): Promise<T> => {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
   return res.json() as Promise<T>;
@@ -29,16 +35,23 @@ export const resolveTickers = async (
   return out.results;
 };
 
-export const fetchPrices = async (
-  ticker: string,
+/**
+ * Fetch daily prices for many tickers in one request. The server fans out to
+ * Yahoo in parallel (cache-aware) and returns one entry per ticker. Per-ticker
+ * fetch failures are returned with an `error` string so a single delisted
+ * symbol doesn't fail the whole batch.
+ */
+export const fetchPricesBatch = async (
+  tickers: string[],
   from: string,
   to: string,
-): Promise<PricePoint[]> => {
+): Promise<PriceBatchResult[]> => {
+  if (tickers.length === 0) return [];
   const res = await fetch("/api/prices", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ticker, from, to }),
+    body: JSON.stringify({ tickers, from, to }),
   });
-  const out = await json<{ ticker: string; prices: PricePoint[] }>(res);
-  return out.prices;
+  const out = await json<{ results: PriceBatchResult[] }>(res);
+  return out.results;
 };

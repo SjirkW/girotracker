@@ -85,49 +85,91 @@ app.post("/api/tickers", async (req: Request, res: Response) => {
 });
 
 /**
+ * Run async work over `items` with at most `limit` in flight at once. Used to
+ * fan-out per-ticker price fetches without hammering Yahoo.
+ */
+async function pMapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (true) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i], i);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+/**
  * POST /api/prices
- * body: { ticker, from: "YYYY-MM-DD", to: "YYYY-MM-DD" }
- * Returns: { ticker, prices: [{ date, close, currency }] }
+ * body: { tickers: string[], from: "YYYY-MM-DD", to: "YYYY-MM-DD" }
+ * Returns: { results: [{ ticker, prices: [{ date, close, currency }], error? }] }
  *
- * Reads cache first, fetches only the missing date ranges from Yahoo, writes
- * them back, and serves the merged result. Daily TTL is implicit: prices for
- * dates <= today never need refetching, and we only ever extend the cached
- * window forward to today.
+ * Batched: caller asks for many tickers in one request, server fans out to
+ * Yahoo in parallel (capped). Per-ticker errors are returned in-band so one
+ * delisted symbol doesn't fail the whole batch.
+ *
+ * Cache behaviour: per ticker we read from SQLite, fetch only the missing
+ * date ranges from Yahoo, write them back, and return the merged result.
+ * Prices for dates <= today are treated as final (we only ever extend the
+ * cached window forward).
  */
 app.post("/api/prices", async (req: Request, res: Response) => {
-  const { ticker, from, to } = req.body ?? {};
-  if (typeof ticker !== "string" || typeof from !== "string" || typeof to !== "string") {
-    return res
-      .status(400)
-      .json({ error: "body must be { ticker: string, from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }" });
+  const { tickers, from, to } = req.body ?? {};
+  if (
+    !Array.isArray(tickers) ||
+    tickers.some((t) => typeof t !== "string") ||
+    typeof from !== "string" ||
+    typeof to !== "string"
+  ) {
+    return res.status(400).json({
+      error:
+        "body must be { tickers: string[], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }",
+    });
   }
 
-  const missing = computeMissingRanges(ticker, from, to);
-  for (const range of missing) {
-    try {
-      const bars = await fetchHistorical(ticker, range.from, range.to);
-      insertPrices(
-        bars.map((b) => ({
+  const uniqueTickers = [...new Set(tickers as string[])];
+
+  const results = await pMapLimit(uniqueTickers, 5, async (ticker) => {
+    const missing = computeMissingRanges(ticker, from, to);
+    for (const range of missing) {
+      try {
+        const bars = await fetchHistorical(ticker, range.from, range.to);
+        insertPrices(
+          bars.map((b) => ({
+            ticker,
+            date: b.date,
+            close: b.close,
+            currency: b.currency,
+          })),
+        );
+        recordFetch(ticker, range.from, range.to);
+      } catch (err) {
+        return {
           ticker,
-          date: b.date,
-          close: b.close,
-          currency: b.currency,
-        })),
-      );
-      recordFetch(ticker, range.from, range.to);
-    } catch (err) {
-      return res.status(502).json({
-        error: `Yahoo fetch failed for ${ticker} ${range.from}..${range.to}: ${(err as Error).message}`,
-      });
+          prices: [],
+          error: `Yahoo fetch failed for ${ticker} ${range.from}..${range.to}: ${(err as Error).message}`,
+        };
+      }
     }
-  }
+    const prices = getCachedPrices(ticker, from, to).map((p) => ({
+      date: p.date,
+      close: p.close,
+      currency: p.currency,
+    }));
+    return { ticker, prices };
+  });
 
-  const prices = getCachedPrices(ticker, from, to).map((p) => ({
-    date: p.date,
-    close: p.close,
-    currency: p.currency,
-  }));
-  res.json({ ticker, prices });
+  res.json({ results });
 });
 
 const port = Number(process.env.PORT ?? 3001);

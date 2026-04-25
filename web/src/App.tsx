@@ -26,7 +26,7 @@ import {
   rangeStartDate,
   type Range,
 } from "@/components/RangeSelector";
-import { fetchPrices, resolveTickers, type TickerLookupResult } from "@/lib/api";
+import { fetchPricesBatch, resolveTickers, type TickerLookupResult } from "@/lib/api";
 import { parseDegiroCsv, type Transaction } from "@/lib/parseCsv";
 import {
   buildDailyHoldings,
@@ -57,25 +57,6 @@ const fmtEur = (n: number) =>
   });
 
 const today = (): string => new Date().toISOString().slice(0, 10);
-
-// Run async tasks with bounded concurrency, returning results in input order.
-async function pMapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      results[i] = await fn(items[i], i);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 const MODES = [
   { id: "return", label: "Return" },
@@ -207,57 +188,67 @@ function App() {
       const fromDate = transactions[0].date;
       const toDate = today();
 
-      // Fetch prices for every resolved ticker. We also capture each ticker's
-      // currency from Yahoo's metadata (NOT the CSV's transaction currency,
-      // which can differ from the actual listing currency on Yahoo — e.g. an
+      // Fetch prices for every resolved ticker in one batched request. The
+      // server fans out to Yahoo with bounded concurrency. We capture each
+      // ticker's currency from Yahoo's metadata (NOT the CSV's transaction
+      // currency, which can differ from the actual listing currency — e.g. an
       // ETF bought in EUR on Milan but resolved to a London listing in GBp).
       const tickersToFetch = [...new Set(isinToTicker.values())];
-      let pricesDone = 0;
-      setStatus({ phase: "prices", done: 0, total: tickersToFetch.length });
+      const priceDates = enumerateDates(fromDate, toDate);
       const pricesByTicker = new Map<string, Map<string, number>>();
       const currencyByTicker = new Map<string, string>();
-      const priceDates = enumerateDates(fromDate, toDate);
-      await pMapLimit(tickersToFetch, 4, async (ticker) => {
-        try {
-          const raw = await fetchPrices(ticker, fromDate, toDate);
-          // Normalize per-row (handles GBp → GBP scaling).
-          const normalized = raw.map((p) => {
-            const n = normalizePriceCurrency(p.close, p.currency);
-            return { date: p.date, close: n.close, currency: n.currency };
-          });
-          if (normalized.length > 0) {
-            currencyByTicker.set(ticker, normalized[0].currency);
-          }
-          pricesByTicker.set(ticker, forwardFillDaily(normalized, priceDates));
-        } catch (err) {
-          console.warn(`prices failed for ${ticker}:`, err);
-          pricesByTicker.set(ticker, new Map());
+
+      setStatus({ phase: "prices", done: 0, total: tickersToFetch.length });
+      const priceResults = await fetchPricesBatch(tickersToFetch, fromDate, toDate);
+      for (const r of priceResults) {
+        if (r.error) {
+          console.warn(`prices failed for ${r.ticker}:`, r.error);
+          pricesByTicker.set(r.ticker, new Map());
+          continue;
         }
-        pricesDone++;
-        setStatus({ phase: "prices", done: pricesDone, total: tickersToFetch.length });
+        const normalized = r.prices.map((p) => {
+          const n = normalizePriceCurrency(p.close, p.currency);
+          return { date: p.date, close: n.close, currency: n.currency };
+        });
+        if (normalized.length > 0) {
+          currencyByTicker.set(r.ticker, normalized[0].currency);
+        }
+        pricesByTicker.set(r.ticker, forwardFillDaily(normalized, priceDates));
+      }
+      setStatus({
+        phase: "prices",
+        done: tickersToFetch.length,
+        total: tickersToFetch.length,
       });
 
       // Fetch FX for every non-EUR currency that any ticker is actually quoted
-      // in on Yahoo.
+      // in on Yahoo — also one batched request.
       const currencies = [...new Set(currencyByTicker.values())].filter(
         (c) => c !== "EUR",
       );
-      let fxDone = 0;
-      setStatus({ phase: "fx", done: 0, total: currencies.length });
       const fxByCurrency = new Map<string, Map<string, number>>();
-      await pMapLimit(currencies, 3, async (ccy) => {
-        const symbol = fxSymbolFor(ccy);
-        if (!symbol) return;
-        try {
-          const prices = await fetchPrices(symbol, fromDate, toDate);
-          fxByCurrency.set(ccy, forwardFillDaily(prices, priceDates));
-        } catch (err) {
-          console.warn(`fx failed for ${ccy}:`, err);
-          fxByCurrency.set(ccy, new Map());
+      const ccyForSymbol = new Map<string, string>();
+      const fxSymbols: string[] = [];
+      for (const ccy of currencies) {
+        const sym = fxSymbolFor(ccy);
+        if (sym) {
+          fxSymbols.push(sym);
+          ccyForSymbol.set(sym, ccy);
         }
-        fxDone++;
-        setStatus({ phase: "fx", done: fxDone, total: currencies.length });
-      });
+      }
+      setStatus({ phase: "fx", done: 0, total: fxSymbols.length });
+      const fxResults = await fetchPricesBatch(fxSymbols, fromDate, toDate);
+      for (const r of fxResults) {
+        const ccy = ccyForSymbol.get(r.ticker);
+        if (!ccy) continue;
+        if (r.error) {
+          console.warn(`fx failed for ${ccy}:`, r.error);
+          fxByCurrency.set(ccy, new Map());
+          continue;
+        }
+        fxByCurrency.set(ccy, forwardFillDaily(r.prices, priceDates));
+      }
+      setStatus({ phase: "fx", done: fxSymbols.length, total: fxSymbols.length });
 
       setStatus({ phase: "computing" });
       const holdings = buildDailyHoldings(transactions, toDate);
@@ -700,7 +691,7 @@ function App() {
                     </div>
                   )}
                 </div>
-                <div className="flex flex-col items-end gap-3">
+                <div className="flex flex-col items-end gap-3 ml-auto">
                   <div className="flex items-center gap-2">
                     <Button
                       variant="ghost"
