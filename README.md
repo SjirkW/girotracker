@@ -57,28 +57,30 @@ rm server/data/cache.db
 
 The server will recreate the schema on next start.
 
-## Deploying to Cloudflare Pages (free)
+## Deploying to Cloudflare (free)
 
-Production runs on **Cloudflare Pages** (static frontend) + **Pages Functions** (the `/api/*` routes), which together stay inside the free tier indefinitely. The local Express server keeps working unchanged for development; Pages Functions live in `web/functions/` and are deployed only with the Pages build.
+Production runs as a single **Cloudflare Worker with Static Assets**: the Worker entrypoint (`worker/index.ts`) serves the `/api/*` routes by proxying directly to Yahoo and OpenFIGI, and the Vite-built SPA in `web/dist/` is served via the assets binding. Everything stays inside the free tier (100k Worker requests/day) for personal use.
 
-There is no server-side cache in production — the Pages Functions proxy directly to Yahoo and OpenFIGI on every call. Your CSV, parsed transactions, and computed valuation are persisted in the browser's `localStorage`, so reloads don't re-trigger upstream calls.
+There is no server-side cache in production — your CSV, parsed transactions, and computed valuation live in the browser's `localStorage`, so reloads don't re-trigger upstream calls. The Express + SQLite server in `server/` is local-dev only.
 
 ### One-time setup
 
-1. Install Wrangler if you don't have it: `npm i -g wrangler && wrangler login`.
-2. From `web/`, create a Pages project linked to your GitHub repo (or run `wrangler pages deploy dist` after the first manual `npm run build`).
-3. In the Cloudflare dashboard set the project's **Build settings**:
-   - Root directory: `web`
-   - Build command: `npm install && npm run build`
-   - Build output directory: `dist`
-4. Optional: under **Settings → Environment variables**, add `OPENFIGI_API_KEY` for faster ISIN resolution.
+1. `npm install` at the repo root (pulls in wrangler).
+2. `npx wrangler login`.
+3. Optional: add an `OPENFIGI_API_KEY` secret for faster ISIN resolution: `npx wrangler secret put OPENFIGI_API_KEY`.
+
+### Deploy
+
+```bash
+npm run deploy        # builds web/dist then `wrangler deploy`
+```
+
+Or, if you've connected the GitHub repo to Cloudflare (Workers & Pages → your Worker → Settings → Build), pushes to `main` trigger an automatic build. Make sure the Cloudflare build command is `npm run deploy` (or `npm install && npm run build:web && npx wrangler deploy`).
 
 ### Local preview of the production setup
 
 ```bash
-cd web
-npm run build
-npx wrangler pages dev dist
+npm run preview       # builds web/dist then `wrangler dev`
 ```
 
-This serves both the static SPA and the Functions on a single localhost port — useful for verifying the Cloudflare runtime before pushing.
+This runs the Worker locally on Workerd and serves the built SPA + the API routes on a single localhost port — useful for verifying everything before pushing.
