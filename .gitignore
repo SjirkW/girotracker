@@ -32,3 +32,8 @@ server/data/*.db-journal
 # cache
 .npm/
 .eslintcache
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
