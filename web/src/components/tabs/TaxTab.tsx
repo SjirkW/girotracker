@@ -25,8 +25,9 @@ type Row = {
   startValueEur: number | null;
   endDate: string | null; // last valuation date within this year
   endValueEur: number | null;
-  netDepositedEur: number; // sum of (−totalEur) for buys minus sells
-  capitalReturnEur: number | null; // endValue − startValue − netDeposited
+  netDepositedEur: number; // pure share value flow (buys − sells), EXCLUDES fees
+  costsEur: number; // sum of FX + transaction fees this year (negative)
+  capitalReturnEur: number | null; // endValue − startValue − netDeposited − |costs|
   taxReturnPct: number | null; // capitalReturnEur / startValueEur (naive, matches tax framework)
   twrPct: number | null; // time-weighted return (Modified Dietz, daily-chained)
 };
@@ -89,16 +90,25 @@ export function TaxTab({
         }
       }
 
+      // Net deposited = pure share value flow (excludes fees). Using
+      // `valueEur` (line value) instead of `totalEur` (with fees) so this
+      // column matches the user's mental model of "how much did I put into
+      // shares this year". Fees are surfaced separately in `costsEur`.
       let netDeposited = 0;
+      let costs = 0;
       for (const t of transactions) {
         if (t.date >= yearStart && t.date <= yearEnd) {
-          netDeposited += -t.totalEur;
+          netDeposited += -t.valueEur;
+          costs += t.fxFee + t.txFee; // both negative for outflows
         }
       }
       const endValue = endDay?.totalEur ?? null;
+      // Capital return stays end - start - cash_committed_total. We rewrite
+      // cash_committed_total as netDeposited(no fees) + |costs|, so the
+      // displayed deposits/costs split decomposes the same total.
       const capitalReturn =
         startValue != null && endValue != null
-          ? endValue - startValue - netDeposited
+          ? endValue - startValue - netDeposited + costs
           : null;
 
       // Two return %s:
@@ -123,6 +133,7 @@ export function TaxTab({
         endDate: endDay?.date ?? null,
         endValueEur: endValue,
         netDepositedEur: netDeposited,
+        costsEur: costs,
         capitalReturnEur: capitalReturn,
         taxReturnPct,
         twrPct,
@@ -163,7 +174,18 @@ export function TaxTab({
                 </div>
               </TableHead>
               <TableHead className="text-right">Year-end value (€)</TableHead>
-              <TableHead className="text-right">Net deposited (€)</TableHead>
+              <TableHead className="text-right">
+                Net deposited (€)
+                <div className="text-[10px] font-normal text-muted-foreground">
+                  shares only, ex. fees
+                </div>
+              </TableHead>
+              <TableHead className="text-right">
+                Costs (€)
+                <div className="text-[10px] font-normal text-muted-foreground">
+                  FX + broker fees
+                </div>
+              </TableHead>
               <TableHead className="text-right">
                 Dividends (€)
                 <div className="text-[10px] font-normal text-muted-foreground">
@@ -213,6 +235,13 @@ export function TaxTab({
                   {privacy
                     ? "•••"
                     : `${r.netDepositedEur >= 0 ? "+" : ""}${fmtEur(r.netDepositedEur)}`}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-red-500/70">
+                  {privacy
+                    ? "•••"
+                    : r.costsEur < 0
+                      ? fmtEur(r.costsEur)
+                      : "—"}
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-emerald-500/80">
                   {privacy
@@ -280,8 +309,12 @@ export function TaxTab({
         </Table>
       </div>
       <p className="text-xs text-muted-foreground max-w-2xl">
+        <span className="font-medium">Net deposited (€)</span> is the pure
+        share value flow (buys − sells), <em>excluding</em> broker and FX
+        fees — those land in the separate{" "}
+        <span className="font-medium">Costs (€)</span> column.{" "}
         <span className="font-medium">Capital return (€)</span> = year-end
-        value − Jan 1 value − net deposited during the year. The{" "}
+        value − Jan 1 value − net deposited − |costs|. The{" "}
         <span className="font-medium">Return %</span> column shows two
         figures: the bold one is the naive{" "}
         <code>capital_return / Jan 1 value</code> — the implicit framing of
@@ -296,8 +329,7 @@ export function TaxTab({
         FX-converted to EUR. Numbers are <em>gross</em> — DEGIRO automatically
         deducts 15-30% withholding tax depending on the listing country, so
         what landed in your account is somewhat lower (you can usually
-        recoup the foreign withholding via the Dutch tax credit).{" "}
-        <span className="font-medium">Broker costs are NOT included.</span>{" "}
+        recoup the foreign withholding via the Dutch tax credit).
         Convenience only, not tax advice.
       </p>
     </>
