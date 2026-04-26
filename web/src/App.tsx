@@ -4,6 +4,7 @@ import { ChartCard, type Mode } from "@/components/ChartCard";
 import { UploadCard } from "@/components/UploadCard";
 import { SummaryCard } from "@/components/SummaryCard";
 import { AppHeader } from "@/components/AppHeader";
+import { AppFooter } from "@/components/AppFooter";
 import { HiddenFileInput } from "@/components/HiddenFileInput";
 import { DataTabsCard } from "@/components/DataTabsCard";
 import { computeHoldings } from "@/lib/portfolio";
@@ -209,6 +210,7 @@ function App() {
         )}
 
         {stats && <SummaryCard {...stats} />}
+        <AppFooter />
       </div>
     </div>
   );
