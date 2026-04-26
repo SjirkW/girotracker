@@ -11,6 +11,10 @@
       content="Free web app that turns a DEGIRO Transactions.csv export into an interactive view of your portfolio's value and returns over time, with stop-loss suggestions, S&amp;P 500 benchmark overlay, time-weighted return, currency exposure, and live prices via Yahoo Finance. Runs entirely in your browser."
     />
     <link rel="canonical" href="https://tracker.girotools.workers.dev/" />
+    <link rel="alternate" hreflang="en" href="https://tracker.girotools.workers.dev/" />
+    <link rel="alternate" hreflang="nl" href="https://tracker.girotools.workers.dev/" />
+    <link rel="alternate" hreflang="de" href="https://tracker.girotools.workers.dev/" />
+    <link rel="alternate" hreflang="x-default" href="https://tracker.girotools.workers.dev/" />
     <meta name="robots" content="index, follow" />
     <meta name="google-site-verification" content="ExO6cBjr9vVtAPhJlSHJyKDCN1S_a1BljJ-VxobLjCo" />
 
@@ -53,13 +57,37 @@
       <main style="max-width: 64rem; margin: 0 auto; padding: 1rem; font-family: system-ui, -apple-system, sans-serif;">
         <h1 style="font-size: 1.875rem; font-weight: 600; letter-spacing: -0.025em;">GIROTRACKER</h1>
         <p style="color: #6b7280; font-size: 0.875rem;">DEGIRO portfolio value over time</p>
-        <p style="margin-top: 1rem; max-width: 42rem;">
-          Upload your DEGIRO <code>Transactions.csv</code> export to see your
-          portfolio's value and returns over time, sorted holdings, suggested
-          stop-loss levels, currency exposure, and live prices — all rendered
-          locally in your browser.
-        </p>
-        <p style="margin-top: 1rem; color: #6b7280; font-size: 0.875rem;">Loading…</p>
+        <section lang="en">
+          <p style="margin-top: 1rem; max-width: 42rem;">
+            Upload your DEGIRO <code>Transactions.csv</code> export to see your
+            portfolio's value and returns over time, sorted holdings, suggested
+            stop-loss levels, currency exposure, and live prices — all rendered
+            locally in your browser.
+          </p>
+        </section>
+        <section lang="nl">
+          <h2 style="margin-top: 1.5rem; font-size: 1rem; font-weight: 600;">DEGIRO portfolio tracker</h2>
+          <p style="max-width: 42rem;">
+            Gratis tool om je DEGIRO-portefeuille te volgen. Upload de
+            <code>Transactions.csv</code>-export uit DEGIRO en krijg direct
+            inzicht in het verloop van je rendement en portefeuillewaarde,
+            voorgestelde stop-loss-niveaus, valuta-blootstelling, en live
+            koersen via Yahoo Finance. Draait volledig in je browser — geen
+            account nodig, geen data die je computer verlaat.
+          </p>
+        </section>
+        <section lang="de">
+          <h2 style="margin-top: 1.5rem; font-size: 1rem; font-weight: 600;">DEGIRO Portfolio Tracker</h2>
+          <p style="max-width: 42rem;">
+            Kostenloses Tool zur Verfolgung deines DEGIRO-Portfolios. Lade den
+            <code>Transactions.csv</code>-Export aus DEGIRO hoch und sieh
+            sofort den Verlauf deiner Rendite und deines Portfoliowerts,
+            empfohlene Stop-Loss-Niveaus, Währungsverteilung sowie
+            Live-Kurse via Yahoo Finance. Läuft vollständig im Browser — kein
+            Konto nötig, deine Daten verlassen den Computer nicht.
+          </p>
+        </section>
+        <p style="margin-top: 1.5rem; color: #6b7280; font-size: 0.875rem;">Loading…</p>
       </main>
     </div>
     <script type="module" src="/src/main.tsx"></script>
