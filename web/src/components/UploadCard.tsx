@@ -70,6 +70,26 @@ export function UploadCard({
             <span className="font-medium">Export → CSV</span>.
           </p>
         </div>
+        <p className="text-xs text-muted-foreground text-center">
+          Don't have a DEGIRO account?{" "}
+          <button
+            type="button"
+            className="underline hover:text-foreground"
+            onClick={async (e) => {
+              // Stop the click from bubbling to the dropzone above (which
+              // would trigger the file picker).
+              e.stopPropagation();
+              const res = await fetch("/demo-transactions.csv");
+              const blob = await res.blob();
+              onFile(
+                new File([blob], "demo-transactions.csv", { type: "text/csv" }),
+              );
+            }}
+          >
+            Try with sample data
+          </button>
+          .
+        </p>
         {fileName && (
           <p className="text-sm text-muted-foreground">
             Loaded <span className="font-medium">{fileName}</span>
