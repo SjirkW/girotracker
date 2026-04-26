@@ -4,6 +4,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -33,6 +34,7 @@ type Props = {
   rangeEnd: string;
   productByIsin: Map<string, string>;
   tickerByIsin: Map<string, string>;
+  dividendsByIsin: Record<string, number>;
   privacy: boolean;
   query: string;
   onQueryChange: (v: string) => void;
@@ -54,6 +56,7 @@ export function HoldingsTab({
   rangeEnd,
   productByIsin,
   tickerByIsin,
+  dividendsByIsin,
   privacy,
   query,
   onQueryChange,
@@ -156,6 +159,12 @@ export function HoldingsTab({
               <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
                 Ticker
               </SortableTh>
+              <TableHead className="text-right">
+                Dividends
+                <div className="text-[10px] font-normal text-muted-foreground">
+                  lifetime, gross
+                </div>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -212,6 +221,15 @@ export function HoldingsTab({
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {h.ticker ?? "—"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-emerald-500/80">
+                  {privacy ? (
+                    <Blurred />
+                  ) : (dividendsByIsin[h.isin] ?? 0) > 0 ? (
+                    `+${fmtEur(dividendsByIsin[h.isin] ?? 0)}`
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
               </TableRow>
             ))}

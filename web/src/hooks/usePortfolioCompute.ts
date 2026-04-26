@@ -1,5 +1,10 @@
 import { useCallback, useState } from "react";
-import { fetchPricesBatch, resolveTickers, type TickerLookupResult } from "@/lib/api";
+import {
+  fetchDividends,
+  fetchPricesBatch,
+  resolveTickers,
+  type TickerLookupResult,
+} from "@/lib/api";
 import type { Transaction } from "@/lib/parseCsv";
 import {
   buildDailyHoldings,
@@ -24,6 +29,8 @@ type Snapshot = {
   valuation?: ValuationDay[];
   nativePrices?: Record<string, NativePrice>;
   benchmarkSeries?: Record<string, number>;
+  dividendsByYear?: Record<string, number>;
+  dividendsByIsin?: Record<string, number>;
 };
 
 export type PortfolioCompute = {
@@ -31,6 +38,8 @@ export type PortfolioCompute = {
   valuation: ValuationDay[];
   nativePrices: Record<string, NativePrice>;
   benchmarkSeries: Record<string, number>;
+  dividendsByYear: Record<string, number>;
+  dividendsByIsin: Record<string, number>;
   status: ComputeStatus;
   compute: (transactions: Transaction[]) => Promise<void>;
   reset: () => void;
@@ -51,6 +60,8 @@ export function usePortfolioCompute(): PortfolioCompute {
   const [valuation, setValuation] = useState<ValuationDay[]>([]);
   const [nativePrices, setNativePrices] = useState<Record<string, NativePrice>>({});
   const [benchmarkSeries, setBenchmarkSeries] = useState<Record<string, number>>({});
+  const [dividendsByYear, setDividendsByYear] = useState<Record<string, number>>({});
+  const [dividendsByIsin, setDividendsByIsin] = useState<Record<string, number>>({});
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
 
   const reset = useCallback(() => {
@@ -58,6 +69,8 @@ export function usePortfolioCompute(): PortfolioCompute {
     setValuation([]);
     setNativePrices({});
     setBenchmarkSeries({});
+    setDividendsByYear({});
+    setDividendsByIsin({});
     setStatus({ phase: "idle" });
   }, []);
 
@@ -66,6 +79,8 @@ export function usePortfolioCompute(): PortfolioCompute {
     if (snapshot.valuation) setValuation(snapshot.valuation);
     if (snapshot.nativePrices) setNativePrices(snapshot.nativePrices);
     if (snapshot.benchmarkSeries) setBenchmarkSeries(snapshot.benchmarkSeries);
+    if (snapshot.dividendsByYear) setDividendsByYear(snapshot.dividendsByYear);
+    if (snapshot.dividendsByIsin) setDividendsByIsin(snapshot.dividendsByIsin);
     if (snapshot.valuation && snapshot.valuation.length > 0) {
       setStatus({ phase: "done" });
     }
@@ -101,6 +116,11 @@ export function usePortfolioCompute(): PortfolioCompute {
       const priceDates = enumerateDates(fromDate, toDate);
       const pricesByTicker = new Map<string, Map<string, number>>();
       const currencyByTicker = new Map<string, string>();
+      // Pre-normalization scale factor per ticker (1 by default, 0.01 for
+      // pence-quoted listings like LON GBp). Dividend events from Yahoo are
+      // raw native units, so they need the same scaling that we already apply
+      // to OHLC closes via `normalizePriceCurrency`.
+      const nativeScaleByTicker = new Map<string, number>();
 
       setStatus({ phase: "prices", done: 0, total: tickersToFetch.length });
       const priceResults = await fetchPricesBatch(tickersToFetch, fromDate, toDate);
@@ -129,6 +149,14 @@ export function usePortfolioCompute(): PortfolioCompute {
         });
         if (normalized.length > 0) {
           currencyByTicker.set(r.ticker, normalized[0].currency);
+          // Derive the scale factor we just applied: e.g. for GBp the
+          // normalized close = raw / 100, so scale = 0.01.
+          const firstRaw = r.prices[0]?.close;
+          const scale =
+            firstRaw != null && firstRaw > 0 && normalized[0].close > 0
+              ? normalized[0].close / firstRaw
+              : 1;
+          nativeScaleByTicker.set(r.ticker, scale);
           const atr = computeAtr(normalized.slice(-60), 14);
           if (atr != null) atrByTicker.set(r.ticker, atr);
         }
@@ -220,6 +248,72 @@ export function usePortfolioCompute(): PortfolioCompute {
         }
       }
       setBenchmarkSeries(benchSeries);
+
+      // Per-year EUR dividends. For each held ticker, fetch dividend events
+      // from Yahoo, multiply each event's per-share amount by the qty held
+      // on the ex-div date, and convert to EUR using that day's FX. These
+      // are GROSS dividends (before any DEGIRO-collected withholding).
+      // Resilient: if the dividend fetch fails entirely, valuation/etc. is
+      // already set, so the user just doesn't see a dividend column.
+      try {
+        const tickerToIsin = new Map<string, string>();
+        for (const [isin, ticker] of isinToTicker) tickerToIsin.set(ticker, isin);
+        const divResults = await fetchDividends(
+          tickersToFetch.filter((t) => t !== BENCHMARK_TICKER),
+          fromDate,
+          toDate,
+        );
+        // Build per-ISIN qty-by-date lookup once. holdings[i].qtyByIsin maps
+        // to running quantity that day (already forward-filled).
+        const qtyByDateByIsin = new Map<string, Map<string, number>>();
+        for (const day of holdings) {
+          for (const [isin, qty] of day.qtyByIsin) {
+            let m = qtyByDateByIsin.get(isin);
+            if (!m) {
+              m = new Map();
+              qtyByDateByIsin.set(isin, m);
+            }
+            m.set(day.date, qty);
+          }
+        }
+        const divsByYear: Record<string, number> = {};
+        const divsByIsin: Record<string, number> = {};
+        for (const r of divResults) {
+          if (r.error) {
+            console.warn(`dividends failed for ${r.ticker}:`, r.error);
+            continue;
+          }
+          const isin = tickerToIsin.get(r.ticker);
+          if (!isin) continue;
+          const qtyMap = qtyByDateByIsin.get(isin);
+          const ccy = currencyByTicker.get(r.ticker);
+          if (!qtyMap || !ccy) continue;
+          // Pence-quoted listings need the same /100 scaling we apply to
+          // closes, otherwise dividends end up 100× too high (a pence amount
+          // gets divided by GBP/EUR, treated as if it were pounds).
+          const nativeScale = nativeScaleByTicker.get(r.ticker) ?? 1;
+          for (const ev of r.dividends) {
+            const qty = qtyMap.get(ev.date) ?? 0;
+            if (qty <= 0) continue;
+            const nativeAmount = ev.amount * qty * nativeScale;
+            let eurAmount = nativeAmount;
+            if (ccy !== "EUR") {
+              const fx = fxByCurrency.get(ccy)?.get(ev.date);
+              if (fx == null || fx <= 0) continue;
+              // EUR<X>=X close = X per 1 EUR; EUR amount = native / fx.
+              eurAmount = nativeAmount / fx;
+            }
+            const year = ev.date.slice(0, 4);
+            divsByYear[year] = (divsByYear[year] ?? 0) + eurAmount;
+            divsByIsin[isin] = (divsByIsin[isin] ?? 0) + eurAmount;
+          }
+        }
+        setDividendsByYear(divsByYear);
+        setDividendsByIsin(divsByIsin);
+      } catch (err) {
+        console.warn("dividend pipeline failed:", err);
+      }
+
       setStatus({ phase: "done" });
     } catch (err) {
       setStatus({ phase: "error", message: (err as Error).message });
@@ -231,6 +325,8 @@ export function usePortfolioCompute(): PortfolioCompute {
     valuation,
     nativePrices,
     benchmarkSeries,
+    dividendsByYear,
+    dividendsByIsin,
     status,
     compute,
     reset,

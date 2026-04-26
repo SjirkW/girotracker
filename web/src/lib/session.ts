@@ -20,6 +20,10 @@ export type PersistedSession = {
   valuation: ValuationDay[];
   nativePrices?: Record<string, NativePrice>;
   benchmarkSeries?: Record<string, number>;
+  /** Dividends received per calendar year, in EUR (gross, before withholding). */
+  dividendsByYear?: Record<string, number>;
+  /** Lifetime dividends per ISIN, in EUR (gross, before withholding). */
+  dividendsByIsin?: Record<string, number>;
 };
 
 export const loadSession = (): PersistedSession | null => {

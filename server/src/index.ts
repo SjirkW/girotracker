@@ -12,8 +12,10 @@ import {
 import { lookupIsins } from "./figi.js";
 import {
   fetchBars,
+  fetchDividends,
   fetchHistorical,
   fetchQuote,
+  type YahooDividend,
   type YahooQuote,
 } from "./yahoo.js";
 
@@ -220,6 +222,46 @@ app.post("/api/quote", async (req: Request, res: Response) => {
       }
     },
   );
+  res.json({ results });
+});
+
+/**
+ * POST /api/dividends
+ * body: { tickers: string[], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+ * Returns: { results: [{ ticker, dividends: [{ date, amount }], error? }] }
+ *
+ * Cash-dividend events per ticker over the requested window. Native
+ * currency. NOT cached.
+ */
+app.post("/api/dividends", async (req: Request, res: Response) => {
+  const { tickers, from, to } = req.body ?? {};
+  if (
+    !Array.isArray(tickers) ||
+    tickers.some((t) => typeof t !== "string") ||
+    typeof from !== "string" ||
+    typeof to !== "string"
+  ) {
+    return res.status(400).json({
+      error:
+        "body must be { tickers: string[], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }",
+    });
+  }
+  const uniqueTickers = [...new Set(tickers as string[])];
+  const results = await pMapLimit<
+    string,
+    { ticker: string; dividends: YahooDividend[]; error?: string }
+  >(uniqueTickers, 8, async (ticker) => {
+    try {
+      const dividends = await fetchDividends(ticker, from, to);
+      return { ticker, dividends };
+    } catch (err) {
+      return {
+        ticker,
+        dividends: [],
+        error: `Yahoo dividends failed for ${ticker}: ${(err as Error).message}`,
+      };
+    }
+  });
   res.json({ results });
 });
 

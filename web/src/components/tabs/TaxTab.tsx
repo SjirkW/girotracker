@@ -15,6 +15,7 @@ type Props = {
   hasValuation: boolean;
   valuation: ValuationDay[];
   transactions: Transaction[];
+  dividendsByYear: Record<string, number>;
   privacy: boolean;
 };
 
@@ -48,6 +49,7 @@ export function TaxTab({
   hasValuation,
   valuation,
   transactions,
+  dividendsByYear,
   privacy,
 }: Props) {
   const rows = useMemo<Row[]>(() => {
@@ -163,6 +165,12 @@ export function TaxTab({
               <TableHead className="text-right">Year-end value (€)</TableHead>
               <TableHead className="text-right">Net deposited (€)</TableHead>
               <TableHead className="text-right">
+                Dividends (€)
+                <div className="text-[10px] font-normal text-muted-foreground">
+                  gross, from Yahoo
+                </div>
+              </TableHead>
+              <TableHead className="text-right">
                 Capital return (€)
                 <div className="text-[10px] font-normal text-muted-foreground">
                   werkelijk rendement
@@ -205,6 +213,13 @@ export function TaxTab({
                   {privacy
                     ? "•••"
                     : `${r.netDepositedEur >= 0 ? "+" : ""}${fmtEur(r.netDepositedEur)}`}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-emerald-500/80">
+                  {privacy
+                    ? "•••"
+                    : (dividendsByYear[String(r.year)] ?? 0) > 0
+                      ? `+${fmtEur(dividendsByYear[String(r.year)] ?? 0)}`
+                      : "—"}
                 </TableCell>
                 <TableCell
                   className={
@@ -276,12 +291,14 @@ export function TaxTab({
         return (Modified Dietz, daily-chained) — it adjusts for when in the
         year deposits happened, so it's directly comparable to an index but{" "}
         <em>not</em> what the gov uses.{" "}
-        <span className="font-medium">
-          Dividends, interest, and broker costs are NOT included
-        </span>{" "}
-        — DEGIRO's <code>Transactions.csv</code> doesn't carry them. For a
-        complete <em>werkelijk rendement</em> figure you'd add dividends from
-        DEGIRO's account/dividend report. Convenience only, not tax advice.
+        <span className="font-medium">Dividends</span> are computed from
+        Yahoo's dividend history × the qty you held on each ex-dividend date,
+        FX-converted to EUR. Numbers are <em>gross</em> — DEGIRO automatically
+        deducts 15-30% withholding tax depending on the listing country, so
+        what landed in your account is somewhat lower (you can usually
+        recoup the foreign withholding via the Dutch tax credit).{" "}
+        <span className="font-medium">Broker costs are NOT included.</span>{" "}
+        Convenience only, not tax advice.
       </p>
     </>
   );

@@ -25,6 +25,8 @@ type Props = {
   tickers: TickerLookupResult[];
   nativePrices: Record<string, NativePrice>;
   lifetimeHoldings: HoldingRow[];
+  dividendsByYear: Record<string, number>;
+  dividendsByIsin: Record<string, number>;
 
   // Shared derivations / metadata
   productByIsin: Map<string, string>;
@@ -51,6 +53,8 @@ export function DataTabsCard({
   tickers,
   nativePrices,
   lifetimeHoldings,
+  dividendsByYear,
+  dividendsByIsin,
   productByIsin,
   tickerByIsin,
   rangeStart,
@@ -168,6 +172,7 @@ export function DataTabsCard({
               rangeEnd={rangeEnd}
               productByIsin={productByIsin}
               tickerByIsin={tickerByIsin}
+              dividendsByIsin={dividendsByIsin}
               privacy={privacy}
               query={holdingsQuery}
               onQueryChange={setHoldingsQuery}
@@ -221,6 +226,7 @@ export function DataTabsCard({
               hasValuation={valuation.length > 0}
               valuation={valuation}
               transactions={transactions}
+              dividendsByYear={dividendsByYear}
               privacy={privacy}
             />
           </TabsContent>

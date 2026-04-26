@@ -129,6 +129,58 @@ export const fetchBars = async (
   return bars;
 };
 
+export type YahooDividend = {
+  date: string; // ex-dividend date, YYYY-MM-DD
+  amount: number; // dividend per share, in the listing's native currency
+};
+
+/**
+ * Cash-dividend history. Uses the chart endpoint with `events=div` directly
+ * (yahoo-finance2's typed wrapper doesn't expose events neatly). NOT cached.
+ */
+export const fetchDividends = async (
+  ticker: string,
+  from: string,
+  to: string,
+): Promise<YahooDividend[]> => {
+  const period1 = Math.floor(new Date(`${from}T00:00:00Z`).getTime() / 1000);
+  const period2Date = new Date(`${to}T00:00:00Z`);
+  period2Date.setUTCDate(period2Date.getUTCDate() + 1);
+  const period2 = Math.floor(period2Date.getTime() / 1000);
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+    `?period1=${period1}&period2=${period2}&interval=1d&events=div`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (girotracker)",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) throw new Error(`Yahoo ${res.status}: ${await res.text()}`);
+  const json = (await res.json()) as {
+    chart: {
+      result?: Array<{
+        events?: {
+          dividends?: Record<string, { amount?: number; date?: number }>;
+        };
+      }>;
+      error?: { description: string } | null;
+    };
+  };
+  if (json.chart?.error) throw new Error(`Yahoo: ${json.chart.error.description}`);
+  const divs = json.chart?.result?.[0]?.events?.dividends ?? {};
+  const out: YahooDividend[] = [];
+  for (const e of Object.values(divs)) {
+    if (e.amount == null || e.date == null) continue;
+    out.push({
+      date: new Date(e.date * 1000).toISOString().slice(0, 10),
+      amount: e.amount,
+    });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+};
+
 export type YahooQuote = {
   symbol: string;
   price: number | null;

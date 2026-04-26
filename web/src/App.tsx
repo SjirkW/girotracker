@@ -28,6 +28,8 @@ function App() {
     valuation,
     nativePrices,
     benchmarkSeries,
+    dividendsByYear,
+    dividendsByIsin,
     status,
     compute,
     reset: resetCompute,
@@ -54,6 +56,8 @@ function App() {
         valuation: s.valuation,
         nativePrices: s.nativePrices,
         benchmarkSeries: s.benchmarkSeries,
+        dividendsByYear: s.dividendsByYear,
+        dividendsByIsin: s.dividendsByIsin,
       });
     }
     setHydrated(true);
@@ -66,8 +70,8 @@ function App() {
       clearSession();
       return;
     }
-    saveSession({ fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries });
-  }, [hydrated, fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries]);
+    saveSession({ fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries, dividendsByYear, dividendsByIsin });
+  }, [hydrated, fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries, dividendsByYear, dividendsByIsin]);
 
   // After parsing a new CSV, also reset the downstream compute state — the
   // hooks own their pieces but the "new file means start over" coordination
@@ -192,6 +196,8 @@ function App() {
             tickers={tickers}
             nativePrices={nativePrices}
             lifetimeHoldings={lifetimeHoldings}
+            dividendsByYear={dividendsByYear}
+            dividendsByIsin={dividendsByIsin}
             productByIsin={productByIsin}
             tickerByIsin={tickerByIsin}
             rangeStart={rangeStart}

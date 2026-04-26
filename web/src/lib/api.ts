@@ -72,6 +72,33 @@ export type QuoteResult = {
   error?: string;
 };
 
+export type DividendEvent = { date: string; amount: number };
+
+export type DividendBatchResult = {
+  ticker: string;
+  dividends: DividendEvent[];
+  error?: string;
+};
+
+/**
+ * Cash-dividend events per ticker (in the listing's native currency).
+ * Powers the dividend-yield calculation in the box-3 tab.
+ */
+export const fetchDividends = async (
+  tickers: string[],
+  from: string,
+  to: string,
+): Promise<DividendBatchResult[]> => {
+  if (tickers.length === 0) return [];
+  const res = await fetch("/api/dividends", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tickers, from, to }),
+  });
+  const out = await json<{ results: DividendBatchResult[] }>(res);
+  return out.results;
+};
+
 export type BarPoint = {
   time: string;
   open: number | null;

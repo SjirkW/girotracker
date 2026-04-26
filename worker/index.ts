@@ -13,8 +13,10 @@
 import { lookupIsins } from "./lib/figi";
 import {
   fetchBars,
+  fetchDividends,
   fetchHistorical,
   fetchQuote,
+  type YahooDividend,
   type YahooQuote,
 } from "./lib/yahoo";
 import { errorResponse, jsonResponse, pMapLimit } from "./lib/util";
@@ -152,6 +154,44 @@ const handleApi = async (
         }
       },
     );
+    return jsonResponse({ results });
+  }
+
+  if (url.pathname === "/api/dividends" && request.method === "POST") {
+    let body: { tickers?: unknown; from?: unknown; to?: unknown };
+    try {
+      body = await request.json();
+    } catch {
+      return errorResponse("invalid JSON body", 400);
+    }
+    const { tickers, from, to } = body;
+    if (
+      !Array.isArray(tickers) ||
+      tickers.some((t) => typeof t !== "string") ||
+      typeof from !== "string" ||
+      typeof to !== "string"
+    ) {
+      return errorResponse(
+        "body must be { tickers: string[], from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }",
+        400,
+      );
+    }
+    const uniqueTickers = [...new Set(tickers as string[])];
+    const results = await pMapLimit<
+      string,
+      { ticker: string; dividends: YahooDividend[]; error?: string }
+    >(uniqueTickers, 8, async (ticker) => {
+      try {
+        const dividends = await fetchDividends(ticker, from, to);
+        return { ticker, dividends };
+      } catch (err) {
+        return {
+          ticker,
+          dividends: [],
+          error: `Yahoo dividends failed for ${ticker}: ${(err as Error).message}`,
+        };
+      }
+    });
     return jsonResponse({ results });
   }
 
