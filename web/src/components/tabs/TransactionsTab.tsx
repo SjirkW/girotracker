@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -9,14 +10,23 @@ import {
 } from "@/components/ui/table";
 import type { Transaction } from "@/lib/parseCsv";
 import { fmtNum } from "@/lib/format";
+import { matchesQuery } from "@/lib/filter";
 
 type Props = {
-  filtered: Transaction[];
+  transactions: Transaction[];
   query: string;
   onQueryChange: (v: string) => void;
 };
 
-export function TransactionsTab({ filtered, query, onQueryChange }: Props) {
+export function TransactionsTab({ transactions, query, onQueryChange }: Props) {
+  const filtered = useMemo(
+    () =>
+      transactions.filter((t) =>
+        matchesQuery(query, t.product, t.isin, t.date, t.currency),
+      ),
+    [transactions, query],
+  );
+
   return (
     <>
       <Input

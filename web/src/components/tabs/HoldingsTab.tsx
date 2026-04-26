@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -15,12 +16,22 @@ import {
   type HoldingSortKey,
   type SortState,
 } from "@/components/SortableTh";
-import type { HoldingRow } from "@/lib/portfolio";
+import {
+  computeHoldings,
+  type ValuationDay,
+} from "@/lib/portfolio";
+import type { Transaction } from "@/lib/parseCsv";
 import { fmtEur, fmtNum } from "@/lib/format";
+import { matchesQuery } from "@/lib/filter";
 
 type Props = {
   hasValuation: boolean;
-  rows: HoldingRow[];
+  transactions: Transaction[];
+  valuation: ValuationDay[];
+  rangeStart: string;
+  rangeEnd: string;
+  productByIsin: Map<string, string>;
+  tickerByIsin: Map<string, string>;
   privacy: boolean;
   query: string;
   onQueryChange: (v: string) => void;
@@ -30,15 +41,18 @@ type Props = {
   onCustomRangeChange: (r: { from: string; to: string }) => void;
   earliestDate: string;
   latestDate: string;
-  sort: SortState;
-  onToggleSort: (k: HoldingSortKey) => void;
   selectedIsin: string | null;
   onSelectIsin: (isin: string | null) => void;
 };
 
 export function HoldingsTab({
   hasValuation,
-  rows,
+  transactions,
+  valuation,
+  rangeStart,
+  rangeEnd,
+  productByIsin,
+  tickerByIsin,
   privacy,
   query,
   onQueryChange,
@@ -48,11 +62,48 @@ export function HoldingsTab({
   onCustomRangeChange,
   earliestDate,
   latestDate,
-  sort,
-  onToggleSort,
   selectedIsin,
   onSelectIsin,
 }: Props) {
+  const [sort, setSort] = useState<SortState>({ key: "valueEur", dir: "desc" });
+  const toggleSort = (key: HoldingSortKey) =>
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "desc" },
+    );
+
+  const rows = useMemo(() => {
+    if (!hasValuation || valuation.length === 0) return [];
+    const all = computeHoldings(
+      transactions,
+      valuation,
+      rangeStart,
+      rangeEnd,
+      productByIsin,
+      tickerByIsin,
+    );
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return all
+      .filter((h) => matchesQuery(query, h.product, h.ticker, h.isin))
+      .sort((a, b) => {
+        const av = a[sort.key];
+        const bv = b[sort.key];
+        if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+        return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+      });
+  }, [
+    hasValuation,
+    transactions,
+    valuation,
+    rangeStart,
+    rangeEnd,
+    productByIsin,
+    tickerByIsin,
+    sort,
+    query,
+  ]);
+
   if (!hasValuation) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -83,25 +134,25 @@ export function HoldingsTab({
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
-              <SortableTh sortKey="product" sort={sort} onToggle={onToggleSort}>
+              <SortableTh sortKey="product" sort={sort} onToggle={toggleSort}>
                 Stock
               </SortableTh>
-              <SortableTh sortKey="valueEur" sort={sort} onToggle={onToggleSort} align="right">
+              <SortableTh sortKey="valueEur" sort={sort} onToggle={toggleSort} align="right">
                 Value
               </SortableTh>
-              <SortableTh sortKey="returnEur" sort={sort} onToggle={onToggleSort} align="right">
+              <SortableTh sortKey="returnEur" sort={sort} onToggle={toggleSort} align="right">
                 Return
               </SortableTh>
-              <SortableTh sortKey="returnPct" sort={sort} onToggle={onToggleSort} align="right">
+              <SortableTh sortKey="returnPct" sort={sort} onToggle={toggleSort} align="right">
                 Return %
               </SortableTh>
-              <SortableTh sortKey="investedEur" sort={sort} onToggle={onToggleSort} align="right">
+              <SortableTh sortKey="investedEur" sort={sort} onToggle={toggleSort} align="right">
                 Invested
               </SortableTh>
-              <SortableTh sortKey="quantity" sort={sort} onToggle={onToggleSort} align="right">
+              <SortableTh sortKey="quantity" sort={sort} onToggle={toggleSort} align="right">
                 Qty
               </SortableTh>
-              <SortableTh sortKey="ticker" sort={sort} onToggle={onToggleSort}>
+              <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
                 Ticker
               </SortableTh>
             </TableRow>

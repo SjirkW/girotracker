@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -8,22 +9,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { TickerLookupResult } from "@/lib/api";
+import { matchesQuery } from "@/lib/filter";
 
 type Props = {
   tickers: TickerLookupResult[];
-  unresolved: TickerLookupResult[];
-  filtered: TickerLookupResult[];
   query: string;
   onQueryChange: (v: string) => void;
 };
 
-export function TickersTab({
-  tickers,
-  unresolved,
-  filtered,
-  query,
-  onQueryChange,
-}: Props) {
+export function TickersTab({ tickers, query, onQueryChange }: Props) {
+  const unresolved = useMemo(() => tickers.filter((t) => !t.ticker), [tickers]);
+  const filtered = useMemo(
+    () =>
+      tickers.filter((t) =>
+        matchesQuery(query, t.isin, t.name, t.ticker, t.exchange),
+      ),
+    [tickers, query],
+  );
+
   if (tickers.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">

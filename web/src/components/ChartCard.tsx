@@ -1,14 +1,20 @@
+import { useMemo } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PortfolioChart, type ChartPoint } from "@/components/PortfolioChart";
+import { PortfolioChart } from "@/components/PortfolioChart";
 import {
   RangeSelector,
   type Range,
 } from "@/components/RangeSelector";
 import { fmtEur, fmtFullDate, fmtPct, today } from "@/lib/format";
 import { BENCHMARK_LABEL } from "@/lib/session";
-import type { ValuationDay } from "@/lib/portfolio";
+import {
+  buildDailyInvested,
+  computeTwr,
+  type ValuationDay,
+} from "@/lib/portfolio";
+import type { Transaction } from "@/lib/parseCsv";
 
 const MODES = [
   { id: "return", label: "Return" },
@@ -16,77 +22,206 @@ const MODES = [
 ] as const;
 export type Mode = (typeof MODES)[number]["id"];
 
-type RangeChange = {
-  abs: number;
-  pct: number;
-  start: number;
-  end: number;
-} | null;
-
 type Props = {
-  selectedIsin: string | null;
+  transactions: Transaction[];
+  valuation: ValuationDay[];
+  benchmarkSeries: Record<string, number>;
   productByIsin: Map<string, string>;
+
+  latest: ValuationDay;
+  earliestDate: string;
+  rangeStart: string;
+  rangeEnd: string;
+
+  selectedIsin: string | null;
   onClearSelection: () => void;
 
   privacy: boolean;
   onTogglePrivacy: () => void;
 
-  hasBenchmarkData: boolean;
   showBenchmark: boolean;
   onToggleBenchmark: () => void;
 
   mode: Mode;
   onModeChange: (m: Mode) => void;
 
-  endDay: ValuationDay | null;
-  latest: ValuationDay;
-  earliestDate: string;
-  rangeStart: string;
-  rangeChange: RangeChange;
-  headlineValue: number;
-
-  investedAtEnd: number;
-  marketAtEnd: number;
-  twr: number | null;
-
   range: Range;
   onRangeChange: (r: Range) => void;
   customRange: { from: string; to: string };
   onCustomRangeChange: (r: { from: string; to: string }) => void;
-
-  rangeData: ChartPoint[];
-  benchmarkRangeData: ChartPoint[] | null;
-  pctDenomByDate: Map<string, number> | undefined;
 };
 
 export function ChartCard({
-  selectedIsin,
+  transactions,
+  valuation,
+  benchmarkSeries,
   productByIsin,
+  latest,
+  earliestDate,
+  rangeStart,
+  rangeEnd,
+  selectedIsin,
   onClearSelection,
   privacy,
   onTogglePrivacy,
-  hasBenchmarkData,
   showBenchmark,
   onToggleBenchmark,
   mode,
   onModeChange,
-  endDay,
-  latest,
-  earliestDate,
-  rangeStart,
-  rangeChange,
-  headlineValue,
-  investedAtEnd,
-  marketAtEnd,
-  twr,
   range,
   onRangeChange,
   customRange,
   onCustomRangeChange,
-  rangeData,
-  benchmarkRangeData,
-  pctDenomByDate,
 }: Props) {
+  const investedByDate = useMemo(() => {
+    if (valuation.length === 0) return new Map<string, number>();
+    return buildDailyInvested(transactions, valuation.map((v) => v.date));
+  }, [transactions, valuation]);
+
+  const investedByDateForSelected = useMemo(() => {
+    if (valuation.length === 0 || !selectedIsin) return new Map<string, number>();
+    return buildDailyInvested(
+      transactions.filter((t) => t.isin === selectedIsin),
+      valuation.map((v) => v.date),
+    );
+  }, [transactions, valuation, selectedIsin]);
+
+  const investedForChart = selectedIsin
+    ? investedByDateForSelected
+    : investedByDate;
+
+  const marketValueForDay = (d: ValuationDay): number =>
+    selectedIsin ? d.perIsinEur[selectedIsin] ?? 0 : d.totalEur;
+
+  const valueForDay = useMemo(
+    () => (d: ValuationDay) => {
+      const market = marketValueForDay(d);
+      if (mode === "value") return market;
+      const invested = investedForChart.get(d.date) ?? 0;
+      return market - invested;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mode, investedForChart, selectedIsin],
+  );
+
+  const endDay = useMemo(
+    () => valuation.find((v) => v.date === rangeEnd) ?? latest,
+    [valuation, rangeEnd, latest],
+  );
+
+  const stockFirstDate = useMemo(() => {
+    if (!selectedIsin) return null;
+    const dates = transactions
+      .filter((t) => t.isin === selectedIsin)
+      .map((t) => t.date)
+      .sort();
+    return dates[0] ?? null;
+  }, [transactions, selectedIsin]);
+
+  const rangeData = useMemo(() => {
+    const effectiveStart =
+      stockFirstDate && stockFirstDate > rangeStart ? stockFirstDate : rangeStart;
+    return valuation
+      .filter((d) => d.date >= effectiveStart && d.date <= rangeEnd)
+      .map((d) => ({ date: d.date, value: Math.round(valueForDay(d)) }));
+  }, [valuation, rangeStart, rangeEnd, valueForDay, stockFirstDate]);
+
+  // "What-if you'd put each cash flow into the S&P 500 instead" curve.
+  // Apples-to-apples: at every transaction date, treat the EUR amount as a
+  // purchase of the index at that day's EUR-denominated S&P 500 price; then
+  // mark to market every day. For mode="return", subtract cumulative
+  // contributions so the chart shows return, matching the portfolio side.
+  const benchmarkRangeData = useMemo(() => {
+    if (!showBenchmark) return null;
+    if (Object.keys(benchmarkSeries).length === 0) return null;
+    if (valuation.length === 0) return null;
+
+    const txs = selectedIsin
+      ? transactions.filter((t) => t.isin === selectedIsin)
+      : transactions;
+    if (txs.length === 0) return null;
+    const cfByDate = new Map<string, number>();
+    for (const t of txs) cfByDate.set(t.date, (cfByDate.get(t.date) ?? 0) - t.totalEur);
+
+    const effectiveStart =
+      stockFirstDate && stockFirstDate > rangeStart ? stockFirstDate : rangeStart;
+
+    let units = 0;
+    let cumulativeCf = 0;
+    let lastSpx: number | null = null;
+    const out: Array<{ date: string; value: number }> = [];
+    for (const v of valuation) {
+      if (v.date > rangeEnd) break;
+      const spx = benchmarkSeries[v.date] ?? lastSpx;
+      const cf = cfByDate.get(v.date) ?? 0;
+      if (cf !== 0 && spx != null && spx > 0) {
+        units += cf / spx;
+        cumulativeCf += cf;
+      }
+      if (spx != null) lastSpx = spx;
+      if (v.date < effectiveStart) continue;
+      const market = lastSpx != null ? units * lastSpx : 0;
+      const value = mode === "value" ? market : market - cumulativeCf;
+      out.push({ date: v.date, value: Math.round(value) });
+    }
+    return out;
+  }, [
+    showBenchmark,
+    benchmarkSeries,
+    valuation,
+    transactions,
+    selectedIsin,
+    rangeStart,
+    rangeEnd,
+    mode,
+    stockFirstDate,
+  ]);
+
+  const rangeChange = useMemo(() => {
+    if (rangeData.length < 2 || !endDay) return null;
+    // Anchor to the requested rangeStart (not the trimmed first chart point), so
+    // shares purchased *during* the window are accounted as capital flow rather
+    // than market gains. Without this, the chart's "+€/€%" disagreed with the
+    // holdings table whenever a position was opened mid-window.
+    const startDay = valuation.find((v) => v.date === rangeStart);
+    const startMarket = startDay ? marketValueForDay(startDay) : 0;
+    const endMarket = marketValueForDay(endDay);
+    const startInvested = investedForChart.get(rangeStart) ?? 0;
+    const endInvested = investedForChart.get(endDay.date) ?? 0;
+    const abs = endMarket - startMarket - (endInvested - startInvested);
+    const denom = mode === "value" ? startMarket || endInvested : endInvested;
+    const pct = denom !== 0 ? abs / Math.abs(denom) : 0;
+    return { abs, pct };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valuation, rangeStart, endDay, mode, investedForChart, selectedIsin, rangeData.length]);
+
+  const headlineValue = endDay ? valueForDay(endDay) : 0;
+
+  // Per-day net cash flow into the portfolio (positive = buys, negative = sells).
+  // totalEur is negative for buys in our CSV convention, so we negate.
+  const cashFlowEurByDate = useMemo(() => {
+    const m = new Map<string, number>();
+    const filtered = selectedIsin
+      ? transactions.filter((t) => t.isin === selectedIsin)
+      : transactions;
+    for (const t of filtered) m.set(t.date, (m.get(t.date) ?? 0) - t.totalEur);
+    return m;
+  }, [transactions, selectedIsin]);
+
+  const twr = useMemo(() => {
+    if (valuation.length < 2 || !endDay) return null;
+    return computeTwr(
+      valuation,
+      cashFlowEurByDate,
+      rangeStart,
+      endDay.date,
+      marketValueForDay,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valuation, cashFlowEurByDate, rangeStart, endDay, selectedIsin]);
+
+  const hasBenchmarkData = Object.keys(benchmarkSeries).length > 0;
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3">
@@ -206,8 +341,9 @@ export function ChartCard({
             </div>
             {!privacy && mode === "return" && endDay && (
               <div className="text-xs text-muted-foreground mt-1 tabular-nums">
-                Capital invested: {fmtEur(investedAtEnd)} · Market value:{" "}
-                {fmtEur(marketAtEnd)}
+                Capital invested:{" "}
+                {fmtEur(investedForChart.get(endDay.date) ?? 0)} · Market value:{" "}
+                {fmtEur(marketValueForDay(endDay))}
                 {twr != null && (
                   <>
                     {" · "}
@@ -239,7 +375,7 @@ export function ChartCard({
           data={rangeData}
           privacy={privacy}
           fmtEur={fmtEur}
-          pctDenomByDate={pctDenomByDate}
+          pctDenomByDate={mode === "return" ? investedForChart : undefined}
           benchmark={benchmarkRangeData}
           benchmarkLabel={BENCHMARK_LABEL}
         />
@@ -247,5 +383,3 @@ export function ChartCard({
     </Card>
   );
 }
-
-export { MODES };

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Table,
   TableBody,
@@ -7,21 +8,63 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fmtEur } from "@/lib/format";
-
-export type CurrencyExposureRow = {
-  currency: string;
-  valueEur: number;
-  positions: number;
-  pct: number;
-};
+import type { HoldingRow } from "@/lib/portfolio";
+import type { Transaction } from "@/lib/parseCsv";
+import type { NativePrice } from "@/lib/session";
 
 type Props = {
   hasValuation: boolean;
-  rows: CurrencyExposureRow[];
+  lifetimeHoldings: HoldingRow[];
+  transactions: Transaction[];
+  nativePrices: Record<string, NativePrice>;
   privacy: boolean;
 };
 
-export function CurrencyTab({ hasValuation, rows, privacy }: Props) {
+export function CurrencyTab({
+  hasValuation,
+  lifetimeHoldings,
+  transactions,
+  nativePrices,
+  privacy,
+}: Props) {
+  const rows = useMemo(() => {
+    type Row = {
+      currency: string;
+      valueEur: number;
+      positions: number;
+      pct: number;
+    };
+    // Fall back to the transaction's currency when a position has no native
+    // price loaded yet (e.g. an unresolved ticker, or a stale localStorage
+    // session from before we started capturing native prices).
+    const txCurrencyByIsin = new Map<string, string>();
+    for (const t of transactions)
+      if (!txCurrencyByIsin.has(t.isin)) txCurrencyByIsin.set(t.isin, t.currency);
+
+    const byCcy = new Map<string, Row>();
+    let total = 0;
+    for (const h of lifetimeHoldings) {
+      if (h.quantity <= 0 || h.valueEur <= 0) continue;
+      const ccy =
+        nativePrices[h.isin]?.currency ??
+        txCurrencyByIsin.get(h.isin) ??
+        "EUR";
+      const row = byCcy.get(ccy) ?? {
+        currency: ccy,
+        valueEur: 0,
+        positions: 0,
+        pct: 0,
+      };
+      row.valueEur += h.valueEur;
+      row.positions += 1;
+      byCcy.set(ccy, row);
+      total += h.valueEur;
+    }
+    return [...byCcy.values()]
+      .map((r) => ({ ...r, pct: total > 0 ? r.valueEur / total : 0 }))
+      .sort((a, b) => b.valueEur - a.valueEur);
+  }, [lifetimeHoldings, nativePrices, transactions]);
+
   if (!hasValuation) {
     return (
       <p className="text-sm text-muted-foreground">

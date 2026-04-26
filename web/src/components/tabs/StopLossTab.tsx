@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -8,9 +9,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { HoldingRow } from "@/lib/portfolio";
+import type { NativePrice } from "@/lib/session";
 import { fmtEur, fmtNum } from "@/lib/format";
 
-export type StopLossRow = HoldingRow & {
+type StopLossRow = HoldingRow & {
   pricePerShareEur: number;
   stopPricePerShareEur: number;
   lockedReturnEur: number;
@@ -25,42 +27,71 @@ export type StopLossRow = HoldingRow & {
 
 type Props = {
   hasValuation: boolean;
-  rows: StopLossRow[];
+  lifetimeHoldings: HoldingRow[];
+  nativePrices: Record<string, NativePrice>;
   privacy: boolean;
-  hasNativePrices: boolean;
-
-  minReturnPct: number;
-  onMinReturnPctChange: (n: number) => void;
-
-  method: "pct" | "atr";
-  onMethodChange: (m: "pct" | "atr") => void;
-
-  pct: number;
-  onPctChange: (n: number) => void;
-
-  atrMultiplier: number;
-  onAtrMultiplierChange: (n: number) => void;
-
-  ccy: "native" | "eur";
-  onCcyChange: (c: "native" | "eur") => void;
 };
 
 export function StopLossTab({
   hasValuation,
-  rows,
+  lifetimeHoldings,
+  nativePrices,
   privacy,
-  hasNativePrices,
-  minReturnPct,
-  onMinReturnPctChange,
-  method,
-  onMethodChange,
-  pct,
-  onPctChange,
-  atrMultiplier,
-  onAtrMultiplierChange,
-  ccy,
-  onCcyChange,
 }: Props) {
+  const [pct, setPct] = useState(15);
+  const [minReturnPct, setMinReturnPct] = useState(25);
+  const [ccy, setCcy] = useState<"native" | "eur">("native");
+  const [method, setMethod] = useState<"pct" | "atr">("pct");
+  const [atrMultiplier, setAtrMultiplier] = useState(2.5);
+
+  const hasNativePrices = Object.keys(nativePrices).length > 0;
+
+  const rows = useMemo<StopLossRow[]>(() => {
+    const stopFrac = pct / 100;
+    const minFrac = minReturnPct / 100;
+    return lifetimeHoldings
+      .filter((h) => h.quantity > 0 && h.valueEur > 0 && h.returnPct >= minFrac)
+      .map((h) => {
+        const native = nativePrices[h.isin] ?? null;
+        const pricePerShareEur = h.valueEur / h.quantity;
+        const nativePrice = native?.price ?? null;
+        const nativeAtr = native?.atr ?? null;
+
+        // ATR-based drop is computed in native units, then converted into a
+        // fractional drop so the same fraction can be applied to EUR too.
+        // Falls back to the fixed % when ATR isn't available for this ticker.
+        let atrFrac: number | null = null;
+        if (nativePrice != null && nativeAtr != null && nativePrice > 0) {
+          atrFrac = (atrMultiplier * nativeAtr) / nativePrice;
+        }
+        const usingAtr = method === "atr" && atrFrac != null;
+        const dropFrac = usingAtr ? atrFrac! : stopFrac;
+
+        const stopPricePerShareEur = pricePerShareEur * (1 - dropFrac);
+        const valueAtStopEur = h.valueEur * (1 - dropFrac);
+        const investedNetEur = h.valueEur - h.returnEur;
+        const lockedReturnEur = valueAtStopEur - investedNetEur;
+        const lockedReturnPct = h.investedEur > 0 ? lockedReturnEur / h.investedEur : 0;
+        const nativeStopPrice =
+          nativePrice != null ? nativePrice * (1 - dropFrac) : null;
+
+        return {
+          ...h,
+          pricePerShareEur,
+          stopPricePerShareEur,
+          lockedReturnEur,
+          lockedReturnPct,
+          nativePrice,
+          nativeStopPrice,
+          nativeCurrency: native?.currency ?? null,
+          nativeAtr,
+          dropFrac,
+          usingAtr,
+        };
+      })
+      .sort((a, b) => b.returnPct - a.returnPct);
+  }, [lifetimeHoldings, nativePrices, pct, minReturnPct, method, atrMultiplier]);
+
   if (!hasValuation) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -81,7 +112,7 @@ export function StopLossTab({
             step={5}
             value={minReturnPct}
             onChange={(e) =>
-              onMinReturnPctChange(Math.max(0, Number(e.target.value) || 0))
+              setMinReturnPct(Math.max(0, Number(e.target.value) || 0))
             }
             className="w-24"
           />
@@ -94,7 +125,7 @@ export function StopLossTab({
             {(["pct", "atr"] as const).map((m) => (
               <button
                 key={m}
-                onClick={() => onMethodChange(m)}
+                onClick={() => setMethod(m)}
                 className={
                   "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
                   (method === m
@@ -119,7 +150,7 @@ export function StopLossTab({
               step={1}
               value={pct}
               onChange={(e) =>
-                onPctChange(
+                setPct(
                   Math.min(50, Math.max(1, Number(e.target.value) || 1)),
                 )
               }
@@ -138,7 +169,7 @@ export function StopLossTab({
               step={0.5}
               value={atrMultiplier}
               onChange={(e) =>
-                onAtrMultiplierChange(
+                setAtrMultiplier(
                   Math.min(10, Math.max(0.5, Number(e.target.value) || 0.5)),
                 )
               }
@@ -154,7 +185,7 @@ export function StopLossTab({
             {(["native", "eur"] as const).map((c) => (
               <button
                 key={c}
-                onClick={() => onCcyChange(c)}
+                onClick={() => setCcy(c)}
                 className={
                   "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
                   (ccy === c
