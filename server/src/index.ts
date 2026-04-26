@@ -56,7 +56,10 @@ app.post("/api/tickers", async (req: Request, res: Response) => {
 
   for (const entry of isins) {
     const cached = getCachedIsin(entry.isin);
-    if (cached) {
+    // Treat a cached null-ticker as a miss so improved resolver logic gets a
+    // chance to re-resolve it. The old resolver could fail on ETFs/ETPs and
+    // poison the cache with a permanent null; this lets the new logic recover.
+    if (cached && cached.ticker) {
       results.push({
         isin: cached.isin,
         ticker: cached.ticker,

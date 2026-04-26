@@ -13,8 +13,6 @@ const FIGI_URL = "https://api.openfigi.com/v3/mapping";
 type FigiRequest = {
   idType: "ID_ISIN";
   idValue: string;
-  exchCode?: string;
-  micCode?: string;
 };
 
 type FigiHit = {
@@ -32,24 +30,46 @@ type FigiResponse = Array<
   { data: FigiHit[] } | { warning: string } | { error: string }
 >;
 
-// DEGIRO "Beurs" code → OpenFIGI exchange code hint.
-const beursToExch: Record<string, string> = {
-  NDQ: "US",
-  NSY: "US",
-  ASE: "US",
-  XET: "GY",
-  OMX: "SS",
-  EAM: "NA",
-  EPA: "FP",
-  LSE: "LN",
-  TDG: "GR",
+// DEGIRO "Beurs" → set of OpenFIGI exchange codes to PREFER when ranking
+// candidates. We send no exchCode in the request (too strict — composite
+// codes like "GY" return zero hits for ETFs that only list on per-floor
+// codes like GR/GD/GS/GM). Instead we get all hits and bias selection.
+const beursPreferredExch: Record<string, Set<string>> = {
+  NDQ: new Set(["US", "UW", "UQ"]),
+  NSY: new Set(["US", "UN"]),
+  ASE: new Set(["US", "UA"]),
+  XET: new Set(["GY", "GR", "GD", "GS", "GM", "GT", "GF"]),
+  TDG: new Set(["GR", "GF", "GY"]),
+  OMX: new Set(["SS"]),
+  EAM: new Set(["NA"]),
+  EPA: new Set(["FP"]),
+  LSE: new Set(["LN"]),
 };
 
-// OpenFIGI exchCode → Yahoo Finance suffix.
+// DEGIRO beurs → Yahoo Finance suffix (canonical). When the user tells us
+// where they trade, that's the source of truth for the Yahoo URL.
+const beursToYahooSuffix: Record<string, string> = {
+  NDQ: "",
+  NSY: "",
+  ASE: "",
+  XET: ".DE",
+  OMX: ".ST",
+  EAM: ".AS",
+  EPA: ".PA",
+  LSE: ".L",
+  TDG: ".F",
+};
+
+// Fallback OpenFIGI exchCode → Yahoo suffix (only used when no beurs hint).
 const yahooSuffixForExch: Record<string, string> = {
   US: "",
   GY: ".DE",
   GR: ".F",
+  GD: ".DE",
+  GS: ".DE",
+  GM: ".DE",
+  GT: ".DE",
+  GF: ".DE",
   SS: ".ST",
   NA: ".AS",
   FP: ".PA",
@@ -72,10 +92,10 @@ export const lookupIsins = async (
   const out: TickerLookup[] = [];
   for (let i = 0; i < isins.length; i += batchSize) {
     const batch = isins.slice(i, i + batchSize);
-    const body: FigiRequest[] = batch.map(({ isin, beurs }) => ({
+    // No exchCode filter — see beursPreferredExch.
+    const body: FigiRequest[] = batch.map(({ isin }) => ({
       idType: "ID_ISIN",
       idValue: isin,
-      ...(beurs && beursToExch[beurs] ? { exchCode: beursToExch[beurs] } : {}),
     }));
 
     const res = await fetch(FIGI_URL, {
@@ -91,16 +111,36 @@ export const lookupIsins = async (
     }
     const json = (await res.json()) as FigiResponse;
     for (let j = 0; j < batch.length; j++) {
-      const { isin } = batch[j];
+      const { isin, beurs } = batch[j];
       const entry = json[j];
       if (!entry || !("data" in entry) || entry.data.length === 0) {
         out.push({ isin, ticker: null, name: null, exchange: null });
         continue;
       }
-      const hit = entry.data.find((h) => h.securityType === "Common Stock") ??
-        entry.data.find((h) => h.securityType2 === "Common Stock") ??
-        entry.data[0];
-      const suffix = yahooSuffixForExch[hit.exchCode ?? ""] ?? "";
+      const preferredExch = beurs ? beursPreferredExch[beurs] : undefined;
+      // Rank candidates: prefer hits on the user's exchange, then Common
+      // Stock, then ETP/Mutual Fund (covers ETFs), then anything else.
+      const score = (h: FigiHit): number => {
+        const exch = h.exchCode ?? "";
+        const onPreferredExch = preferredExch?.has(exch) ? 100 : 0;
+        const isCommon =
+          h.securityType === "Common Stock" ||
+          h.securityType2 === "Common Stock"
+            ? 10
+            : 0;
+        const isEtp =
+          h.securityType === "ETP" || h.securityType2 === "Mutual Fund"
+            ? 5
+            : 0;
+        return onPreferredExch + isCommon + isEtp;
+      };
+      const hit = [...entry.data].sort((a, b) => score(b) - score(a))[0];
+      // Suffix: prefer the user's beurs (DEGIRO knows where they actually
+      // trade); fall back to mapping the FIGI hit's exchange code.
+      const suffix =
+        (beurs && beursToYahooSuffix[beurs]) ??
+        yahooSuffixForExch[hit.exchCode ?? ""] ??
+        "";
       // Bloomberg/OpenFIGI uses "BRK/B" for share classes; Yahoo uses "BRK-B".
       // Yahoo's URL routing breaks on the slash, so translate it.
       const yahooBase = hit.ticker.replace(/\//g, "-");
