@@ -19,6 +19,10 @@ type Props = {
   // by `startEntry.value` makes percentages explode. Pass capital deployed
   // at each date here so the chart matches the headline range %.
   pctDenomByDate?: Map<string, number>;
+  // Optional second series (e.g. benchmark "what-if"). Drawn dashed in a
+  // muted color so the primary line stays the protagonist.
+  benchmark?: ChartPoint[] | null;
+  benchmarkLabel?: string;
 };
 
 const fmtFullDate = (iso: string): string => {
@@ -72,7 +76,14 @@ const decimate = (data: ChartPoint[]): ChartPoint[] => {
  * LineChart's `margin.right` reserves 16 px on the right. Everything in
  * between is the data area, which we use to map pixel x ↔ data index.
  */
-function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
+function PortfolioChartImpl({
+  data,
+  privacy,
+  fmtEur,
+  pctDenomByDate,
+  benchmark,
+  benchmarkLabel,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Hover overlay refs.
@@ -80,6 +91,7 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const tooltipDateRef = useRef<HTMLDivElement>(null);
   const tooltipValueRef = useRef<HTMLDivElement>(null);
+  const tooltipBenchRef = useRef<HTMLDivElement>(null);
 
   // Drag overlay refs.
   const dragRectRef = useRef<HTMLDivElement>(null);
@@ -91,7 +103,20 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
   const dragStartXRef = useRef<number | null>(null);
   const hasRectRef = useRef(false);
 
-  const chartData = useMemo(() => decimate(data), [data]);
+  // Merge benchmark into the primary dataset (joined by date) so a single
+  // decimated, single-render LineChart can plot both lines without going out
+  // of sync. Date keys are preserved exactly so the existing pixel↔index math
+  // and tooltip logic don't need to change.
+  const chartData = useMemo(() => {
+    const decimated = decimate(data);
+    if (!benchmark || benchmark.length === 0) return decimated;
+    const benchByDate = new Map<string, number>();
+    for (const p of benchmark) benchByDate.set(p.date, p.value);
+    return decimated.map((p) => ({
+      ...p,
+      benchmark: benchByDate.get(p.date),
+    }));
+  }, [data, benchmark]);
 
   // Refs for current props/data so the (one-time-bound) DOM listeners can
   // read the latest values without being re-attached on every render.
@@ -103,6 +128,8 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
   fmtEurRef.current = fmtEur;
   const pctDenomRef = useRef(pctDenomByDate);
   pctDenomRef.current = pctDenomByDate;
+  const benchmarkLabelRef = useRef(benchmarkLabel);
+  benchmarkLabelRef.current = benchmarkLabel;
 
   const hideHover = () => {
     if (cursorRef.current) cursorRef.current.style.opacity = "0";
@@ -168,6 +195,17 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
         tooltipValueRef.current.textContent = privacyRef.current
           ? "•••"
           : fmtEurRef.current(point.value);
+      }
+      if (tooltipBenchRef.current) {
+        const bench = (point as { benchmark?: number }).benchmark;
+        if (bench != null) {
+          tooltipBenchRef.current.style.display = "";
+          tooltipBenchRef.current.textContent = privacyRef.current
+            ? "•••"
+            : `${benchmarkLabelRef.current ?? "Benchmark"}: ${fmtEurRef.current(bench)}`;
+        } else {
+          tooltipBenchRef.current.style.display = "none";
+        }
       }
     };
 
@@ -354,6 +392,11 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
       >
         <div ref={tooltipDateRef} className="text-muted-foreground" />
         <div ref={tooltipValueRef} className="font-medium" />
+        <div
+          ref={tooltipBenchRef}
+          className="text-muted-foreground"
+          style={{ display: "none" }}
+        />
       </div>
 
       <ResponsiveContainer width="100%" height="100%">
@@ -386,6 +429,19 @@ function PortfolioChartImpl({ data, privacy, fmtEur, pctDenomByDate }: Props) {
             isAnimationActive={false}
             activeDot={false}
           />
+          {benchmark && benchmark.length > 0 && (
+            <Line
+              type="linear"
+              dataKey="benchmark"
+              stroke="var(--muted-foreground)"
+              strokeWidth={1.5}
+              strokeDasharray="4 4"
+              dot={false}
+              isAnimationActive={false}
+              activeDot={false}
+              connectNulls
+            />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

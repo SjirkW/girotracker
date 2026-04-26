@@ -297,6 +297,50 @@ export const computeHoldings = (
   );
 };
 
+/**
+ * Time-weighted return over [startDate, endDate], computed via daily Modified
+ * Dietz: each day's return = (V_today − V_yesterday − CF_today) / (V_yesterday
+ * + 0.5·CF_today), then geometrically chained. Treats CF as occurring mid-day.
+ *
+ * TWR isolates investment performance from the timing of deposits/withdrawals,
+ * which is what you compare against an index. (Money-weighted/IRR — what the
+ * existing headline shows — is dominated by *when* money was added.)
+ *
+ * `cashFlowEurByDate` is positive for net cash IN (a buy) and negative for net
+ * cash OUT (a sell) on a given date. Compute it as `−Σ totalEur` over a day's
+ * transactions (since totalEur is negative for buys in the CSV convention).
+ *
+ * Returns null when the window is too short or has no usable starting value.
+ */
+export const computeTwr = (
+  valuation: ValuationDay[],
+  cashFlowEurByDate: Map<string, number>,
+  startDate: string,
+  endDate: string,
+  marketValueOf: (d: ValuationDay) => number = (d) => d.totalEur,
+): number | null => {
+  if (valuation.length < 2) return null;
+  const window = valuation.filter(
+    (v) => v.date >= startDate && v.date <= endDate,
+  );
+  if (window.length < 2) return null;
+  let chain = 1;
+  let any = false;
+  for (let i = 1; i < window.length; i++) {
+    const prev = marketValueOf(window[i - 1]);
+    const cur = marketValueOf(window[i]);
+    const cf = cashFlowEurByDate.get(window[i].date) ?? 0;
+    const denom = prev + 0.5 * cf;
+    // Skip days where there's no meaningful starting capital (e.g. the
+    // position was opened that day with no prior value to grow).
+    if (denom <= 0.01) continue;
+    const r = (cur - prev - cf) / denom;
+    chain *= 1 + r;
+    any = true;
+  }
+  return any ? chain - 1 : null;
+};
+
 export const computeValuation = (input: ValuationInput): ValuationDay[] => {
   const out: ValuationDay[] = [];
   for (const day of input.holdings) {

@@ -24,6 +24,7 @@ import {
   buildDailyHoldings,
   buildDailyInvested,
   computeHoldings,
+  computeTwr,
   computeValuation,
   enumerateDates,
   forwardFillDaily,
@@ -65,12 +66,16 @@ const STORAGE_KEY = "girotracker:session:v1";
 
 type NativePrice = { price: number; currency: string; atr?: number | null };
 
+const BENCHMARK_TICKER = "^GSPC";
+const BENCHMARK_LABEL = "S&P 500";
+
 type PersistedSession = {
   fileName: string | null;
   transactions: Transaction[];
   tickers: TickerLookupResult[];
   valuation: ValuationDay[];
   nativePrices?: Record<string, NativePrice>;
+  benchmarkSeries?: Record<string, number>;
 };
 
 /**
@@ -190,6 +195,8 @@ function App() {
   const [tickers, setTickers] = useState<TickerLookupResult[]>([]);
   const [valuation, setValuation] = useState<ValuationDay[]>([]);
   const [nativePrices, setNativePrices] = useState<Record<string, NativePrice>>({});
+  const [benchmarkSeries, setBenchmarkSeries] = useState<Record<string, number>>({});
+  const [showBenchmark, setShowBenchmark] = useState(false);
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -221,6 +228,7 @@ function App() {
       setTickers(s.tickers ?? []);
       setValuation(s.valuation ?? []);
       setNativePrices(s.nativePrices ?? {});
+      setBenchmarkSeries(s.benchmarkSeries ?? {});
       if (s.valuation && s.valuation.length > 0) setStatus({ phase: "done" });
     }
     setHydrated(true);
@@ -237,8 +245,8 @@ function App() {
       }
       return;
     }
-    saveSession({ fileName, transactions, tickers, valuation, nativePrices });
-  }, [hydrated, fileName, transactions, tickers, valuation, nativePrices]);
+    saveSession({ fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries });
+  }, [hydrated, fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries]);
 
   const fmtPct = (p: number) =>
     `${p >= 0 ? "+" : ""}${(p * 100).toLocaleString("nl-NL", {
@@ -255,6 +263,7 @@ function App() {
     setTickers([]);
     setValuation([]);
     setNativePrices({});
+    setBenchmarkSeries({});
     setStatus({ phase: "idle" });
   };
 
@@ -297,7 +306,9 @@ function App() {
       // ticker's currency from Yahoo's metadata (NOT the CSV's transaction
       // currency, which can differ from the actual listing currency — e.g. an
       // ETF bought in EUR on Milan but resolved to a London listing in GBp).
-      const tickersToFetch = [...new Set(isinToTicker.values())];
+      const tickersToFetch = [
+        ...new Set([...isinToTicker.values(), BENCHMARK_TICKER]),
+      ];
       const priceDates = enumerateDates(fromDate, toDate);
       const pricesByTicker = new Map<string, Map<string, number>>();
       const currencyByTicker = new Map<string, string>();
@@ -341,10 +352,11 @@ function App() {
       });
 
       // Fetch FX for every non-EUR currency that any ticker is actually quoted
-      // in on Yahoo — also one batched request.
-      const currencies = [...new Set(currencyByTicker.values())].filter(
-        (c) => c !== "EUR",
-      );
+      // in on Yahoo — also one batched request. Always include USD so we can
+      // convert the S&P 500 (USD-denominated) into EUR for the benchmark line.
+      const currencies = [
+        ...new Set([...currencyByTicker.values(), "USD"]),
+      ].filter((c) => c !== "EUR");
       const fxByCurrency = new Map<string, Map<string, number>>();
       const ccyForSymbol = new Map<string, string>();
       const fxSymbols: string[] = [];
@@ -406,6 +418,27 @@ function App() {
         nativeByIsin,
       );
       setNativePrices(nativeByIsin);
+
+      // Build the S&P 500 price series in EUR per ^GSPC unit, forward-filled
+      // across every date in the window so simulating buys on weekends/holidays
+      // just picks up the prior trading day's close.
+      const spxNative = pricesByTicker.get(BENCHMARK_TICKER);
+      const usdFx = fxByCurrency.get("USD");
+      const benchSeries: Record<string, number> = {};
+      if (spxNative && usdFx) {
+        for (const date of priceDates) {
+          const px = spxNative.get(date);
+          const fx = usdFx.get(date);
+          if (px != null && fx != null && fx > 0) {
+            // EURUSD=X close = USD per 1 EUR; EUR price = USD price / fx.
+            benchSeries[date] = px / fx;
+          }
+        }
+      }
+      console.log(
+        `[benchmark] captured ${Object.keys(benchSeries).length} S&P 500 EUR prices`,
+      );
+      setBenchmarkSeries(benchSeries);
       setStatus({ phase: "done" });
     } catch (err) {
       setStatus({ phase: "error", message: (err as Error).message });
@@ -483,6 +516,57 @@ function App() {
       .map((d) => ({ date: d.date, value: Math.round(valueForDay(d)) }));
   }, [valuation, rangeStart, rangeEnd, valueForDay, stockFirstDate]);
 
+  // "What-if you'd put each cash flow into the S&P 500 instead" curve.
+  // Apples-to-apples: at every transaction date, treat the EUR amount as a
+  // purchase of the index at that day's EUR-denominated S&P 500 price; then
+  // mark to market every day. For mode="return", subtract cumulative
+  // contributions so the chart shows return, matching the portfolio side.
+  const benchmarkRangeData = useMemo(() => {
+    if (!showBenchmark) return null;
+    if (Object.keys(benchmarkSeries).length === 0) return null;
+    if (valuation.length === 0) return null;
+
+    const txs = selectedIsin
+      ? transactions.filter((t) => t.isin === selectedIsin)
+      : transactions;
+    if (txs.length === 0) return null;
+    const cfByDate = new Map<string, number>();
+    for (const t of txs) cfByDate.set(t.date, (cfByDate.get(t.date) ?? 0) - t.totalEur);
+
+    const effectiveStart =
+      stockFirstDate && stockFirstDate > rangeStart ? stockFirstDate : rangeStart;
+
+    let units = 0;
+    let cumulativeCf = 0;
+    let lastSpx: number | null = null;
+    const out: Array<{ date: string; value: number }> = [];
+    for (const v of valuation) {
+      if (v.date > rangeEnd) break;
+      const spx = benchmarkSeries[v.date] ?? lastSpx;
+      const cf = cfByDate.get(v.date) ?? 0;
+      if (cf !== 0 && spx != null && spx > 0) {
+        units += cf / spx;
+        cumulativeCf += cf;
+      }
+      if (spx != null) lastSpx = spx;
+      if (v.date < effectiveStart) continue;
+      const market = lastSpx != null ? units * lastSpx : 0;
+      const value = mode === "value" ? market : market - cumulativeCf;
+      out.push({ date: v.date, value: Math.round(value) });
+    }
+    return out;
+  }, [
+    showBenchmark,
+    benchmarkSeries,
+    valuation,
+    transactions,
+    selectedIsin,
+    rangeStart,
+    rangeEnd,
+    mode,
+    stockFirstDate,
+  ]);
+
   const rangeChange = useMemo(() => {
     if (rangeData.length < 2 || !endDay) return null;
     // Anchor to the requested rangeStart (not the trimmed first chart point), so
@@ -502,6 +586,29 @@ function App() {
   }, [valuation, rangeStart, endDay, mode, investedForChart, selectedIsin]);
 
   const headlineValue = endDay ? valueForDay(endDay) : 0;
+
+  // Per-day net cash flow into the portfolio (positive = buys, negative =
+  // sells). totalEur is negative for buys in our CSV convention, so we negate.
+  const cashFlowEurByDate = useMemo(() => {
+    const m = new Map<string, number>();
+    const filtered = selectedIsin
+      ? transactions.filter((t) => t.isin === selectedIsin)
+      : transactions;
+    for (const t of filtered) m.set(t.date, (m.get(t.date) ?? 0) - t.totalEur);
+    return m;
+  }, [transactions, selectedIsin]);
+
+  const twr = useMemo(() => {
+    if (valuation.length < 2 || !endDay) return null;
+    return computeTwr(
+      valuation,
+      cashFlowEurByDate,
+      rangeStart,
+      endDay.date,
+      marketValueForDay,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valuation, cashFlowEurByDate, rangeStart, endDay, selectedIsin]);
 
   const productByIsin = useMemo(() => {
     const m = new Map<string, string>();
@@ -538,6 +645,46 @@ function App() {
       tickerByIsin,
     );
   }, [transactions, valuation, earliestDate, latest, productByIsin, tickerByIsin]);
+
+  const txCurrencyByIsin = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of transactions) if (!m.has(t.isin)) m.set(t.isin, t.currency);
+    return m;
+  }, [transactions]);
+
+  const currencyExposure = useMemo(() => {
+    type Row = {
+      currency: string;
+      valueEur: number;
+      positions: number;
+      pct: number;
+    };
+    const byCcy = new Map<string, Row>();
+    let total = 0;
+    for (const h of lifetimeHoldings) {
+      if (h.quantity <= 0 || h.valueEur <= 0) continue;
+      const ccy =
+        nativePrices[h.isin]?.currency ??
+        txCurrencyByIsin.get(h.isin) ??
+        "EUR";
+      const row = byCcy.get(ccy) ?? {
+        currency: ccy,
+        valueEur: 0,
+        positions: 0,
+        pct: 0,
+      };
+      row.valueEur += h.valueEur;
+      row.positions += 1;
+      byCcy.set(ccy, row);
+      total += h.valueEur;
+    }
+    const rows = [...byCcy.values()].map((r) => ({
+      ...r,
+      pct: total > 0 ? r.valueEur / total : 0,
+    }));
+    rows.sort((a, b) => b.valueEur - a.valueEur);
+    return { rows, total };
+  }, [lifetimeHoldings, nativePrices, txCurrencyByIsin]);
 
   const stopLossRows = useMemo(() => {
     const stopFrac = stopLossPct / 100;
@@ -814,6 +961,16 @@ function App() {
                 >
                   {privacy ? <EyeOff /> : <Eye />}
                 </Button>
+                {Object.keys(benchmarkSeries).length > 0 && (
+                  <Button
+                    variant={showBenchmark ? "secondary" : "ghost"}
+                    size="xs"
+                    onClick={() => setShowBenchmark((b) => !b)}
+                    title={`What if you'd put each cash flow into ${BENCHMARK_LABEL} instead`}
+                  >
+                    vs {BENCHMARK_LABEL}
+                  </Button>
+                )}
                 <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
                   {MODES.map((m) => (
                     <button
@@ -897,6 +1054,21 @@ function App() {
                       Capital invested:{" "}
                       {fmtEur(investedForChart.get(endDay.date) ?? 0)} · Market value:{" "}
                       {fmtEur(marketValueForDay(endDay))}
+                      {twr != null && (
+                        <>
+                          {" · "}
+                          <span title="Time-weighted return: strips out the timing of deposits, so it's directly comparable to an index">
+                            TWR:{" "}
+                            <span
+                              className={
+                                twr >= 0 ? "text-emerald-500" : "text-red-500"
+                              }
+                            >
+                              {fmtPct(twr)}
+                            </span>
+                          </span>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -914,6 +1086,8 @@ function App() {
                 privacy={privacy}
                 fmtEur={fmtEur}
                 pctDenomByDate={mode === "return" ? investedForChart : undefined}
+                benchmark={benchmarkRangeData}
+                benchmarkLabel={BENCHMARK_LABEL}
               />
             </CardContent>
           </Card>
@@ -927,6 +1101,7 @@ function App() {
                   <TabsList>
                     <TabsTrigger value="holdings">Holdings</TabsTrigger>
                     <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
+                    <TabsTrigger value="currency">Currency</TabsTrigger>
                     <TabsTrigger value="tickers">
                       Tickers
                       {tickers.length > 0 &&
@@ -952,7 +1127,7 @@ function App() {
                     >
                       {privacy ? <EyeOff /> : <Eye />}
                     </Button>
-                    {activeTab !== "stoploss" && (
+                    {activeTab !== "stoploss" && activeTab !== "currency" && (
                       <Input
                         type="search"
                         placeholder={
@@ -1317,6 +1492,73 @@ function App() {
                           </Table>
                         </div>
                       )}
+                    </>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="currency" className="mt-4 space-y-3">
+                  {valuation.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Click "Compute portfolio" to see currency exposure.
+                    </p>
+                  ) : currencyExposure.rows.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No open positions.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground max-w-md">
+                        How your open positions break down by listing currency
+                        — anything outside EUR is FX risk.
+                      </p>
+                      <div className="overflow-x-auto">
+                        <Table className="text-[13px]">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Currency</TableHead>
+                              <TableHead className="text-right">Value (€)</TableHead>
+                              <TableHead className="text-right">Share</TableHead>
+                              <TableHead>{""}</TableHead>
+                              <TableHead className="text-right">Positions</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {currencyExposure.rows.map((r) => (
+                              <TableRow key={r.currency}>
+                                <TableCell className="font-mono text-xs">
+                                  {r.currency}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {privacy ? "•••" : fmtEur(r.valueEur)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {(r.pct * 100).toLocaleString("nl-NL", {
+                                    minimumFractionDigits: 1,
+                                    maximumFractionDigits: 1,
+                                  })}
+                                  %
+                                </TableCell>
+                                <TableCell className="w-[180px]">
+                                  <div className="h-2 w-full rounded bg-muted overflow-hidden">
+                                    <div
+                                      className={
+                                        "h-full " +
+                                        (r.currency === "EUR"
+                                          ? "bg-emerald-500/70"
+                                          : "bg-sky-500/70")
+                                      }
+                                      style={{ width: `${r.pct * 100}%` }}
+                                    />
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums text-muted-foreground">
+                                  {r.positions}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </>
                   )}
                 </TabsContent>
