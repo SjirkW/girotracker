@@ -2,87 +2,90 @@
 
 **Live app: <https://tracker.girotools.workers.dev/>**
 
-A web app that visualises a DEGIRO portfolio's value and returns over time, using the broker's Transactions CSV export plus Yahoo Finance prices.
+A web app that turns a DEGIRO `Transactions.csv` export into an interactive view of your portfolio's value and returns over time, using Yahoo Finance for prices and OpenFIGI for ISIN→ticker resolution.
 
-## Stack
+## Features
 
-- **server/** — Node + Express, SQLite cache (`better-sqlite3`), `yahoo-finance2`, OpenFIGI for ISIN→ticker resolution
-- **web/** — Vite + React + TypeScript, Tailwind v4, shadcn/ui, recharts
+### Portfolio chart
+- **Return** or **Value** mode — see total P/L over time, or raw market value.
+- **Date range** presets (1M / 3M / YTD / 1Y / 5Y / MAX) plus a custom from/to picker.
+- **Per-stock drill-down** — click any row in the Holdings table to redraw the chart for that single position. The chart auto-trims to the date you first bought it.
+- **vs S&P 500 benchmark** — toggle a "what if you'd put each cash flow into the index instead" curve, computed apples-to-apples against your actual contributions.
+- **Time-weighted return (TWR)** — strips out deposit timing so it's directly comparable to an index.
+- **Privacy mode** — one-click toggle that masks all EUR amounts, leaving percentages visible (handy for screen sharing).
 
-The server caches every Yahoo and OpenFIGI response in `server/data/cache.db` so repeated runs are instant and historical prices are never re-fetched.
+### Holdings tab
+- Per-stock value, return (€ and %), invested amount, quantity, ticker.
+- Sortable by any column; filterable by name / ticker / ISIN.
+- Date-range aware: shows return *over the selected window*, not just lifetime.
 
-## Prerequisites
+### Stop loss tab
+- Suggests trailing stop-loss levels for your winning positions.
+- Two methods: **fixed %** (e.g. 15% below current price) or **ATR-based** (multiplier × 14-day ATR — adapts to each stock's volatility).
+- Filter by minimum return % so you only see positions worth protecting.
+- Toggle between **native ticker currency** and **EUR** for the price and stop level.
+- Shows the locked-in return you'd realize if the stop triggers today.
 
-- Node.js 20 or later (the server runs fine on 20; `yahoo-finance2@3` prints a notice asking for ≥22 but works)
-- A DEGIRO `Transactions.csv` export
+### Currency tab
+- Breaks down portfolio exposure by the native currency of each holding.
 
-## First-time setup
+### Tickers tab
+- Lists every ISIN in your CSV with its resolved Yahoo Finance ticker and exchange.
+- Header counter shows resolved-vs-total at a glance.
 
-```bash
-npm install            # installs concurrently at root
-npm run install:all    # installs server/ and web/ deps
-```
+### Transactions tab
+- Full transaction log from your CSV, filterable by date / product / ISIN / currency.
+
+### Session persistence
+- Your CSV, parsed transactions, and computed valuation are stored in `localStorage`, so reloading the page doesn't re-fetch anything.
 
 ## Running locally
 
 ```bash
+npm install && npm run install:all
 npm run degiro
 ```
 
-This starts the backend (port 3001) and frontend (port 5173) together with prefixed/colored logs (`server` in blue, `web` in magenta) and ties their lifetimes together — kill one and the other stops too.
+This starts the backend (port 3001) and frontend (port 5173) together. Open <http://localhost:5173>, upload your CSV, and click **Compute portfolio**. First run takes ~30s; subsequent runs are instant from the SQLite cache (`server/data/cache.db`).
 
-Then open <http://localhost:5173>. Vite proxies `/api/*` to the backend, so the frontend doesn't need any extra config.
+Requires Node 20+. To wipe the cache: `rm server/data/cache.db`.
 
-If you'd rather run them separately, each folder still has its own `npm run dev`.
+### Optional: faster ISIN resolution
 
-In the app: click the upload area, pick your DEGIRO Transactions CSV, then hit **Compute portfolio**. First run takes ~30s (resolves ~30–40 ISINs and fetches their full price history); subsequent runs are nearly instant from the SQLite cache.
-
-## Endpoints
-
-- `GET /api/health` — sanity check, lists DB tables
-- `POST /api/tickers` — body `{ isins: [{ isin, beurs }] }` → ISIN→Yahoo ticker (cached forever)
-- `POST /api/prices` — body `{ ticker, from, to }` → daily closes (gap-fills only the missing days)
-
-## Optional: OpenFIGI API key
-
-Without a key, OpenFIGI allows 25 requests/min, max 10 jobs per request. If you have many ISINs and want faster resolution, set `OPENFIGI_API_KEY` in the server's environment — that bumps it to 25 req/6s and 100 jobs/request.
+Without an OpenFIGI key you get 25 req/min. With one, you get 25 req/6s:
 
 ```bash
-OPENFIGI_API_KEY=your_key npm run dev
+OPENFIGI_API_KEY=your_key npm run degiro
 ```
 
-## Resetting the cache
+## Deploying to Cloudflare
 
-```bash
-rm server/data/cache.db
-```
-
-The server will recreate the schema on next start.
-
-## Deploying to Cloudflare (free)
-
-Production runs as a single **Cloudflare Worker with Static Assets**: the Worker entrypoint (`worker/index.ts`) serves the `/api/*` routes by proxying directly to Yahoo and OpenFIGI, and the Vite-built SPA in `web/dist/` is served via the assets binding. Everything stays inside the free tier (100k Worker requests/day) for personal use.
-
-There is no server-side cache in production — your CSV, parsed transactions, and computed valuation live in the browser's `localStorage`, so reloads don't re-trigger upstream calls. The Express + SQLite server in `server/` is local-dev only.
+Production runs as a single Cloudflare Worker with Static Assets — `worker/index.ts` serves `/api/*` (proxying Yahoo + OpenFIGI directly), and the Vite-built SPA in `web/dist/` is served via the assets binding. Everything fits in the free tier for personal use. There is no server-side cache in prod; the browser's `localStorage` carries derived data between sessions.
 
 ### One-time setup
 
-1. `npm install` at the repo root (pulls in wrangler).
-2. `npx wrangler login`.
-3. Optional: add an `OPENFIGI_API_KEY` secret for faster ISIN resolution: `npx wrangler secret put OPENFIGI_API_KEY`.
+```bash
+npx wrangler login
+npx wrangler secret put OPENFIGI_API_KEY   # optional
+```
 
 ### Deploy
 
 ```bash
 npm run deploy        # builds web/dist then `wrangler deploy`
+npm run preview       # runs the production setup locally on Workerd
 ```
 
-Or, if you've connected the GitHub repo to Cloudflare (Workers & Pages → your Worker → Settings → Build), pushes to `main` trigger an automatic build. Make sure the Cloudflare build command is `npm run deploy` (or `npm install && npm run build:web && npx wrangler deploy`).
+Pushes to `main` also trigger a build automatically if you've connected the repo to Cloudflare (build command: `npm run deploy`).
 
-### Local preview of the production setup
+## Stack
 
-```bash
-npm run preview       # builds web/dist then `wrangler dev`
-```
+- **web/** — Vite + React + TypeScript, Tailwind v4, shadcn/ui, recharts
+- **worker/** — Cloudflare Worker entrypoint (production); raw `fetch` to Yahoo + OpenFIGI
+- **server/** — Node + Express + `better-sqlite3` (local-dev only); same `/api/*` shape as the worker, with caching via `yahoo-finance2`
 
-This runs the Worker locally on Workerd and serves the built SPA + the API routes on a single localhost port — useful for verifying everything before pushing.
+## API
+
+- `GET /api/health` — sanity check
+- `POST /api/tickers` — `{ isins: [{ isin, beurs }] }` → ISIN→Yahoo ticker
+- `POST /api/prices` — `{ ticker, from, to }` → daily closes

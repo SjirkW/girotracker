@@ -152,7 +152,7 @@ export function ChartCard({
     const out: Array<{ date: string; value: number }> = [];
     for (const v of valuation) {
       if (v.date > rangeEnd) break;
-      const spx = benchmarkSeries[v.date] ?? lastSpx;
+      const spx: number | null = benchmarkSeries[v.date] ?? lastSpx;
       const cf = cfByDate.get(v.date) ?? 0;
       if (cf !== 0 && spx != null && spx > 0) {
         units += cf / spx;
