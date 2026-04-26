@@ -152,7 +152,7 @@ function CandleChartImpl({ data }: Props) {
     range: [d.low, d.high] as [number, number],
   }));
   return (
-    <div className="h-[420px]">
+    <div className="h-[420px] [&_*]:outline-none [&_*]:focus:outline-none [&_*]:focus-visible:outline-none">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={chartData}
