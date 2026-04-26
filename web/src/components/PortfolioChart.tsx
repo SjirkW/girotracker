@@ -351,7 +351,10 @@ function PortfolioChartImpl({
   return (
     <div
       ref={containerRef}
-      className="relative h-[420px] select-none"
+      // Strip the focus ring recharts paints on the SVG when you click it —
+      // the chart isn't keyboard-interactive in this app, so the outline only
+      // adds visual noise.
+      className="relative h-[420px] select-none [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none"
       // pan-y lets the browser keep handling vertical page scroll on touch
       // devices; horizontal gestures fall through to our pointer handlers.
       style={{ touchAction: "pan-y" }}
