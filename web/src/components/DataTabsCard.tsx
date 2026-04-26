@@ -9,6 +9,7 @@ import { LiveTab } from "@/components/tabs/LiveTab";
 import { CandlesTab } from "@/components/tabs/CandlesTab";
 import { StopLossTab } from "@/components/tabs/StopLossTab";
 import { CurrencyTab } from "@/components/tabs/CurrencyTab";
+import { TaxTab } from "@/components/tabs/TaxTab";
 import { TickersTab } from "@/components/tabs/TickersTab";
 import { TransactionsTab } from "@/components/tabs/TransactionsTab";
 import type { Range } from "@/components/RangeSelector";
@@ -82,7 +83,8 @@ export function DataTabsCard({
       activeTab === "stoploss" ||
       activeTab === "currency" ||
       activeTab === "live" ||
-      activeTab === "candles"
+      activeTab === "candles" ||
+      activeTab === "tax"
     )
       return null;
     const placeholder =
@@ -118,6 +120,7 @@ export function DataTabsCard({
                 <TabsTrigger value="candles">Candles</TabsTrigger>
                 <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
                 <TabsTrigger value="currency">Currency</TabsTrigger>
+                <TabsTrigger value="tax">Box 3</TabsTrigger>
                 <TabsTrigger value="tickers">
                   Tickers
                   {tickers.length > 0 &&
@@ -209,6 +212,15 @@ export function DataTabsCard({
               lifetimeHoldings={lifetimeHoldings}
               transactions={transactions}
               nativePrices={nativePrices}
+              privacy={privacy}
+            />
+          </TabsContent>
+
+          <TabsContent value="tax" className="mt-4 space-y-3">
+            <TaxTab
+              hasValuation={valuation.length > 0}
+              valuation={valuation}
+              transactions={transactions}
               privacy={privacy}
             />
           </TabsContent>
