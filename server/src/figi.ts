@@ -47,8 +47,10 @@ const beursPreferredExch: Record<string, Set<string>> = {
 };
 
 // DEGIRO beurs → Yahoo Finance suffix (canonical). When the user tells us
-// where they trade, that's the source of truth for the Yahoo URL.
-const beursToYahooSuffix: Record<string, string> = {
+// where they trade, that's the source of truth for the Yahoo URL. Exported
+// so the cache layer can detect "cached ticker doesn't match user's
+// exchange" and re-resolve.
+export const beursToYahooSuffix: Record<string, string> = {
   NDQ: "",
   NSY: "",
   ASE: "",

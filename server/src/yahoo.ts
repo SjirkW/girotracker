@@ -181,6 +181,46 @@ export const fetchDividends = async (
   return out;
 };
 
+export type YahooSearchHit = {
+  symbol: string;
+  shortname: string | null;
+  exchange: string | null;
+  quoteType: string | null;
+};
+
+/**
+ * Yahoo's free-text search — used as a fallback when OpenFIGI doesn't have
+ * an ISIN (e.g. orphan ISINs from corporate actions).
+ */
+export const searchYahoo = async (query: string): Promise<YahooSearchHit[]> => {
+  const url =
+    `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (girotracker)",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) throw new Error(`Yahoo search ${res.status}: ${await res.text()}`);
+  const json = (await res.json()) as {
+    quotes?: Array<{
+      symbol?: string;
+      shortname?: string;
+      longname?: string;
+      exchange?: string;
+      quoteType?: string;
+    }>;
+  };
+  return (json.quotes ?? [])
+    .filter((q) => q.symbol)
+    .map((q) => ({
+      symbol: q.symbol!,
+      shortname: q.shortname ?? q.longname ?? null,
+      exchange: q.exchange ?? null,
+      quoteType: q.quoteType ?? null,
+    }));
+};
+
 export type YahooQuote = {
   symbol: string;
   price: number | null;

@@ -16,9 +16,11 @@ import {
   fetchDividends,
   fetchHistorical,
   fetchQuote,
+  searchYahoo,
   type YahooDividend,
   type YahooQuote,
 } from "./lib/yahoo";
+import { pickYahooHit } from "./lib/pickYahooHit";
 import { errorResponse, jsonResponse, pMapLimit } from "./lib/util";
 
 type AssetsBinding = { fetch: (req: Request) => Promise<Response> };
@@ -51,7 +53,9 @@ const handleApi = async (
   }
 
   if (url.pathname === "/api/tickers" && request.method === "POST") {
-    let body: { isins?: Array<{ isin: string; beurs?: string }> };
+    let body: {
+      isins?: Array<{ isin: string; beurs?: string; product?: string }>;
+    };
     try {
       body = await request.json();
     } catch {
@@ -63,7 +67,32 @@ const handleApi = async (
     }
     try {
       const looked = await lookupIsins(isins, env.OPENFIGI_API_KEY);
-      const results = looked.map((r) => ({ ...r, source: "openfigi" as const }));
+      // Yahoo search fallback for OpenFIGI orphans (e.g. ISINs retired by
+      // corporate actions where the new ticker isn't mapped to the old ID).
+      // Bounded to 5 in flight to stay under any per-host rate limits.
+      const byIsin = new Map(isins.map((e) => [e.isin, e]));
+      const results = await pMapLimit(looked, 5, async (r) => {
+        if (r.ticker) return { ...r, source: "openfigi" as const };
+        const meta = byIsin.get(r.isin);
+        const product = meta?.product;
+        if (!product) return { ...r, source: "openfigi" as const };
+        try {
+          const hits = await searchYahoo(product);
+          const best = pickYahooHit(hits, meta?.beurs);
+          if (best) {
+            return {
+              isin: r.isin,
+              ticker: best.symbol,
+              name: best.shortname,
+              exchange: best.exchange,
+              source: "yahoo" as const,
+            };
+          }
+        } catch (err) {
+          console.warn(`Yahoo search fallback failed for ${r.isin}:`, err);
+        }
+        return { ...r, source: "openfigi" as const };
+      });
       return jsonResponse({ results });
     } catch (err) {
       return errorResponse(

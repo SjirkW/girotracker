@@ -93,7 +93,11 @@ export function usePortfolioCompute(): PortfolioCompute {
 
       setStatus({ phase: "tickers" });
       const tickerResults = await resolveTickers(
-        meta.map((m) => ({ isin: m.isin, beurs: m.beurs })),
+        meta.map((m) => ({
+          isin: m.isin,
+          beurs: m.beurs,
+          product: m.product,
+        })),
       );
       setTickers(tickerResults);
 

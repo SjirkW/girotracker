@@ -9,15 +9,17 @@ import {
   recordFetch,
   upsertIsin,
 } from "./cache.js";
-import { lookupIsins } from "./figi.js";
+import { beursToYahooSuffix, lookupIsins } from "./figi.js";
 import {
   fetchBars,
   fetchDividends,
   fetchHistorical,
   fetchQuote,
+  searchYahoo,
   type YahooDividend,
   type YahooQuote,
 } from "./yahoo.js";
+import { pickYahooHit } from "./pickYahooHit.js";
 
 const app = express();
 app.use(cors());
@@ -39,8 +41,11 @@ app.get("/api/health", (_req, res) => {
  * from SQLite; misses go to OpenFIGI in batched requests.
  */
 app.post("/api/tickers", async (req: Request, res: Response) => {
-  const isins: Array<{ isin: string; beurs?: string; name?: string }> =
-    req.body?.isins ?? [];
+  const isins: Array<{
+    isin: string;
+    beurs?: string;
+    product?: string;
+  }> = req.body?.isins ?? [];
   if (!Array.isArray(isins) || isins.length === 0) {
     return res.status(400).json({ error: "body.isins must be a non-empty array" });
   }
@@ -50,16 +55,36 @@ app.post("/api/tickers", async (req: Request, res: Response) => {
     ticker: string | null;
     name: string | null;
     exchange: string | null;
-    source: "cache" | "openfigi";
+    source: "cache" | "openfigi" | "yahoo";
   }> = [];
-  const misses: Array<{ isin: string; beurs?: string }> = [];
+  const misses: Array<{ isin: string; beurs?: string; product?: string }> = [];
+
+  // Helper: does a cached ticker match the suffix the user's beurs implies?
+  // Cache hits from a different exchange are stale for *this* user's listing
+  // and should be re-resolved so we get the right Yahoo symbol.
+  const cachedSuffixMatches = (
+    ticker: string,
+    beurs?: string,
+  ): boolean => {
+    if (!beurs) return true;
+    const expected = beursToYahooSuffix[beurs];
+    if (expected === undefined) return true; // unknown beurs — accept cache
+    const cachedSuffix = ticker.includes(".")
+      ? ticker.slice(ticker.lastIndexOf("."))
+      : "";
+    return cachedSuffix === expected;
+  };
 
   for (const entry of isins) {
     const cached = getCachedIsin(entry.isin);
-    // Treat a cached null-ticker as a miss so improved resolver logic gets a
-    // chance to re-resolve it. The old resolver could fail on ETFs/ETPs and
-    // poison the cache with a permanent null; this lets the new logic recover.
-    if (cached && cached.ticker) {
+    // Treat a cached null-ticker, or a cached ticker on the *wrong* exchange
+    // for the user's listing, as a miss so the resolver gets a chance to
+    // produce the right Yahoo symbol.
+    if (
+      cached &&
+      cached.ticker &&
+      cachedSuffixMatches(cached.ticker, entry.beurs)
+    ) {
       results.push({
         isin: cached.isin,
         ticker: cached.ticker,
@@ -68,21 +93,53 @@ app.post("/api/tickers", async (req: Request, res: Response) => {
         source: "cache",
       });
     } else {
-      misses.push({ isin: entry.isin, beurs: entry.beurs });
+      misses.push({
+        isin: entry.isin,
+        beurs: entry.beurs,
+        product: entry.product,
+      });
     }
   }
 
   if (misses.length > 0) {
     try {
       const looked = await lookupIsins(misses);
+      const missByIsin = new Map(misses.map((m) => [m.isin, m]));
       for (const r of looked) {
+        let resolved = r;
+        let source: "openfigi" | "yahoo" = "openfigi";
+        // Yahoo search fallback for OpenFIGI orphans (e.g. ISINs retired by
+        // corporate actions). Uses the product name from the CSV.
+        if (!r.ticker) {
+          const meta = missByIsin.get(r.isin);
+          if (meta?.product) {
+            try {
+              const hits = await searchYahoo(meta.product);
+              const best = pickYahooHit(hits, meta.beurs);
+              if (best) {
+                resolved = {
+                  isin: r.isin,
+                  ticker: best.symbol,
+                  name: best.shortname,
+                  exchange: best.exchange,
+                };
+                source = "yahoo";
+              }
+            } catch (err) {
+              console.warn(
+                `Yahoo search fallback failed for ${r.isin}:`,
+                (err as Error).message,
+              );
+            }
+          }
+        }
         upsertIsin({
-          isin: r.isin,
-          ticker: r.ticker,
-          name: r.name,
-          exchange: r.exchange,
+          isin: resolved.isin,
+          ticker: resolved.ticker,
+          name: resolved.name,
+          exchange: resolved.exchange,
         });
-        results.push({ ...r, source: "openfigi" });
+        results.push({ ...resolved, source });
       }
     } catch (err) {
       return res

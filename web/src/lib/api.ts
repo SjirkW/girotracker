@@ -3,7 +3,7 @@ export type TickerLookupResult = {
   ticker: string | null;
   name: string | null;
   exchange: string | null;
-  source: "cache" | "openfigi";
+  source: "cache" | "openfigi" | "yahoo";
 };
 
 export type PricePoint = {
@@ -27,7 +27,7 @@ const json = async <T>(res: Response): Promise<T> => {
 };
 
 export const resolveTickers = async (
-  isins: Array<{ isin: string; beurs?: string }>,
+  isins: Array<{ isin: string; beurs?: string; product?: string }>,
 ): Promise<TickerLookupResult[]> => {
   const res = await fetch("/api/tickers", {
     method: "POST",
