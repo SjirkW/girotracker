@@ -7,6 +7,7 @@
 export type YahooBar = {
   date: string; // YYYY-MM-DD
   close: number;
+  open: number | null;
   high: number | null;
   low: number | null;
   currency: string | null;
@@ -20,6 +21,7 @@ type YahooChartResponse = {
       indicators?: {
         quote?: Array<{
           close?: Array<number | null>;
+          open?: Array<number | null>;
           high?: Array<number | null>;
           low?: Array<number | null>;
         }>;
@@ -67,13 +69,14 @@ export const fetchHistorical = async (
   const timestamps = result.timestamp ?? [];
   const quote = result.indicators?.quote?.[0];
   const closes = quote?.close ?? [];
+  const opens = quote?.open ?? [];
   const highs = quote?.high ?? [];
   const lows = quote?.low ?? [];
   const adjcloses = result.indicators?.adjclose?.[0]?.adjclose ?? [];
 
-  // adjclose differs from close by historical splits/dividends; high/low are
-  // raw, so when we surface adjclose we scale highs/lows by the same factor
-  // to keep the bar internally consistent for things like ATR.
+  // adjclose differs from close by historical splits/dividends; OHL are raw,
+  // so when we surface adjclose we scale them by the same factor to keep the
+  // bar internally consistent for things like ATR + candle plotting.
   const bars: YahooBar[] = [];
   for (let i = 0; i < timestamps.length; i++) {
     const rawClose = closes[i];
@@ -82,11 +85,13 @@ export const fetchHistorical = async (
     const factor = adjcloses[i] != null && rawClose != null && rawClose > 0
       ? adjcloses[i]! / rawClose
       : 1;
+    const open = opens[i] != null ? opens[i]! * factor : null;
     const high = highs[i] != null ? highs[i]! * factor : null;
     const low = lows[i] != null ? lows[i]! * factor : null;
     bars.push({
       date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
       close,
+      open,
       high,
       low,
       currency,
@@ -116,6 +121,71 @@ export type YahooQuote = {
  * a narrow range. Instead we take the most recent bar dated strictly before
  * the latest price's date.
  */
+export type YahooBarPoint = {
+  /** ISO timestamp; second-precision so it works for both intraday and daily. */
+  time: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number;
+};
+
+/**
+ * OHLC bars at any (interval, range) Yahoo supports. NOT cached: this powers
+ * the candles tab where the user picks the granularity, and our SQLite cache
+ * is keyed (ticker, date) which collides for intraday.
+ *
+ * Common (interval, range) combos:
+ *   - 1D candles: ("5m"|"15m"|"30m", "1d") — intraday
+ *   - 1W:        ("30m"|"1h"|"1d",   "5d")
+ *   - 1M:        ("1h"|"1d"|"1wk",   "1mo")
+ *   - 1Y:        ("1d"|"1wk"|"1mo",  "1y")
+ *   - ALL:       ("1wk"|"1mo"|"3mo", "max")
+ */
+export const fetchBars = async (
+  ticker: string,
+  interval: string,
+  range: string,
+): Promise<YahooBarPoint[]> => {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+    `?interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (girotracker)",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`Yahoo ${res.status}: ${await res.text()}`);
+  }
+  const json = (await res.json()) as YahooChartResponse;
+  if (json.chart?.error) {
+    throw new Error(`Yahoo: ${json.chart.error.description}`);
+  }
+  const result = json.chart?.result?.[0];
+  if (!result) return [];
+  const timestamps = result.timestamp ?? [];
+  const quote = result.indicators?.quote?.[0];
+  const closes = quote?.close ?? [];
+  const opens = quote?.open ?? [];
+  const highs = quote?.high ?? [];
+  const lows = quote?.low ?? [];
+  const bars: YahooBarPoint[] = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    const close = closes[i];
+    if (close == null) continue;
+    bars.push({
+      time: new Date(timestamps[i] * 1000).toISOString(),
+      open: opens[i] ?? null,
+      high: highs[i] ?? null,
+      low: lows[i] ?? null,
+      close,
+    });
+  }
+  return bars;
+};
+
 export const fetchQuote = async (ticker: string): Promise<YahooQuote> => {
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +

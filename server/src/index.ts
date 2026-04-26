@@ -10,7 +10,12 @@ import {
   upsertIsin,
 } from "./cache.js";
 import { lookupIsins } from "./figi.js";
-import { fetchHistorical, fetchQuote, type YahooQuote } from "./yahoo.js";
+import {
+  fetchBars,
+  fetchHistorical,
+  fetchQuote,
+  type YahooQuote,
+} from "./yahoo.js";
 
 const app = express();
 app.use(cors());
@@ -149,6 +154,7 @@ app.post("/api/prices", async (req: Request, res: Response) => {
             ticker,
             date: b.date,
             close: b.close,
+            open: b.open,
             high: b.high,
             low: b.low,
             currency: b.currency,
@@ -166,6 +172,7 @@ app.post("/api/prices", async (req: Request, res: Response) => {
     const prices = getCachedPrices(ticker, from, to).map((p) => ({
       date: p.date,
       close: p.close,
+      open: p.open,
       high: p.high,
       low: p.low,
       currency: p.currency,
@@ -214,6 +221,35 @@ app.post("/api/quote", async (req: Request, res: Response) => {
     },
   );
   res.json({ results });
+});
+
+/**
+ * POST /api/bars
+ * body: { ticker: string, interval: string, range: string }
+ * Returns: { bars: [{ time, open, high, low, close }] }
+ *
+ * OHLC bars at any (interval, range) Yahoo supports — powers the candle
+ * chart's range × granularity matrix. NOT cached.
+ */
+app.post("/api/bars", async (req: Request, res: Response) => {
+  const { ticker, interval, range } = req.body ?? {};
+  if (
+    typeof ticker !== "string" ||
+    typeof interval !== "string" ||
+    typeof range !== "string"
+  ) {
+    return res.status(400).json({
+      error: "body must be { ticker: string, interval: string, range: string }",
+    });
+  }
+  try {
+    const bars = await fetchBars(ticker, interval, range);
+    res.json({ bars });
+  } catch (err) {
+    res.status(502).json({
+      error: `Yahoo bars failed for ${ticker} (${interval}/${range}): ${(err as Error).message}`,
+    });
+  }
 });
 
 const port = Number(process.env.PORT ?? 3001);

@@ -23,6 +23,7 @@ db.exec(`
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
     close REAL NOT NULL,
+    open REAL,
     high REAL,
     low REAL,
     currency TEXT,
@@ -47,6 +48,7 @@ const addColumnIfMissing = (column: string) => {
     if (!String(err).includes("duplicate column name")) throw err;
   }
 };
+addColumnIfMissing("open");
 addColumnIfMissing("high");
 addColumnIfMissing("low");
 
@@ -62,6 +64,7 @@ export type PriceRow = {
   ticker: string;
   date: string;
   close: number;
+  open: number | null;
   high: number | null;
   low: number | null;
   currency: string | null;

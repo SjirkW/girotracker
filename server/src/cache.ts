@@ -37,10 +37,11 @@ const getPricesStmt = db.prepare<[string, string, string], PriceRow>(
   "SELECT * FROM prices WHERE ticker = ? AND date >= ? AND date <= ? ORDER BY date ASC",
 );
 const insertPriceStmt = db.prepare(
-  `INSERT INTO prices (ticker, date, close, high, low, currency)
-   VALUES (@ticker, @date, @close, @high, @low, @currency)
+  `INSERT INTO prices (ticker, date, close, open, high, low, currency)
+   VALUES (@ticker, @date, @close, @open, @high, @low, @currency)
    ON CONFLICT(ticker, date) DO UPDATE SET
      close = excluded.close,
+     open = excluded.open,
      high = excluded.high,
      low = excluded.low,
      currency = excluded.currency`,
@@ -88,8 +89,9 @@ export const recordFetch = (
   });
 };
 
-const countMissingHighStmt = db.prepare<[string, string, string], { c: number }>(
-  "SELECT COUNT(*) AS c FROM prices WHERE ticker = ? AND date >= ? AND date <= ? AND high IS NULL",
+const countMissingOhlcStmt = db.prepare<[string, string, string], { c: number }>(
+  "SELECT COUNT(*) AS c FROM prices WHERE ticker = ? AND date >= ? AND date <= ? " +
+    "AND (open IS NULL OR high IS NULL OR low IS NULL)",
 );
 
 /**
@@ -130,16 +132,14 @@ export const computeMissingRanges = (
     });
   }
 
-  // Backfill trailing OHLC if missing in the last 30 days (enough for ATR(14)
-  // plus a little slack). Skip when the requested range doesn't even reach
-  // back that far.
-  const ohlcWindowFrom = addDays(effTo, -30);
-  const backfillFrom = ohlcWindowFrom < fromDate ? fromDate : ohlcWindowFrom;
-  if (backfillFrom <= effTo) {
-    const row = countMissingHighStmt.get(ticker, backfillFrom, effTo);
-    if (row && row.c > 0) {
-      ranges.push({ from: backfillFrom, to: effTo });
-    }
+  // Backfill OHLC across the full requested window when any cached row is
+  // missing open/high/low. Older installs cached close-only rows; later we
+  // added high/low; later still we added open. Each addition needs a refill,
+  // so the check stays generic across the full OHLC quartet. A full refill
+  // subsumes any head/tail gaps we already queued, so just return it alone.
+  const ohlcRow = countMissingOhlcStmt.get(ticker, fromDate, effTo);
+  if (ohlcRow && ohlcRow.c > 0) {
+    return [{ from: fromDate, to: effTo }];
   }
 
   return ranges;

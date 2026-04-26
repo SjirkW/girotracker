@@ -11,7 +11,12 @@
  */
 
 import { lookupIsins } from "./lib/figi";
-import { fetchHistorical, fetchQuote, type YahooQuote } from "./lib/yahoo";
+import {
+  fetchBars,
+  fetchHistorical,
+  fetchQuote,
+  type YahooQuote,
+} from "./lib/yahoo";
 import { errorResponse, jsonResponse, pMapLimit } from "./lib/util";
 
 type AssetsBinding = { fetch: (req: Request) => Promise<Response> };
@@ -26,6 +31,7 @@ type PriceBatchResult = {
   prices: Array<{
     date: string;
     close: number;
+    open: number | null;
     high: number | null;
     low: number | null;
     currency: string | null;
@@ -96,6 +102,7 @@ const handleApi = async (
             prices: bars.map((b) => ({
               date: b.date,
               close: b.close,
+              open: b.open,
               high: b.high,
               low: b.low,
               currency: b.currency,
@@ -146,6 +153,35 @@ const handleApi = async (
       },
     );
     return jsonResponse({ results });
+  }
+
+  if (url.pathname === "/api/bars" && request.method === "POST") {
+    let body: { ticker?: unknown; interval?: unknown; range?: unknown };
+    try {
+      body = await request.json();
+    } catch {
+      return errorResponse("invalid JSON body", 400);
+    }
+    const { ticker, interval, range } = body;
+    if (
+      typeof ticker !== "string" ||
+      typeof interval !== "string" ||
+      typeof range !== "string"
+    ) {
+      return errorResponse(
+        "body must be { ticker: string, interval: string, range: string }",
+        400,
+      );
+    }
+    try {
+      const bars = await fetchBars(ticker, interval, range);
+      return jsonResponse({ bars });
+    } catch (err) {
+      return errorResponse(
+        `Yahoo bars failed for ${ticker} (${interval}/${range}): ${(err as Error).message}`,
+        502,
+      );
+    }
   }
 
   return errorResponse("not found", 404);

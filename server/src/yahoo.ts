@@ -5,6 +5,7 @@ const yf = new YahooFinance();
 export type YahooBar = {
   date: string; // YYYY-MM-DD
   close: number;
+  open: number | null;
   high: number | null;
   low: number | null;
   currency: string | null;
@@ -38,20 +39,91 @@ export const fetchHistorical = async (
     const rawClose = q.close;
     const close = q.adjclose ?? rawClose;
     if (close == null) continue;
-    // adjclose folds in splits/dividends; rescale high/low so the bar stays
-    // internally consistent (matters for ATR).
+    // adjclose folds in splits/dividends; rescale OHL so the bar stays
+    // internally consistent (matters for ATR + candle plotting).
     const factor =
       q.adjclose != null && rawClose != null && rawClose > 0
         ? q.adjclose / rawClose
         : 1;
+    const open = q.open != null ? q.open * factor : null;
     const high = q.high != null ? q.high * factor : null;
     const low = q.low != null ? q.low * factor : null;
     bars.push({
       date: new Date(q.date).toISOString().slice(0, 10),
       close,
+      open,
       high,
       low,
       currency,
+    });
+  }
+  return bars;
+};
+
+export type YahooBarPoint = {
+  time: string; // ISO timestamp; second-precision works for both intraday and daily
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number;
+};
+
+/**
+ * OHLC bars at any (interval, range) Yahoo supports. NOT cached: this powers
+ * the candles tab where the user picks the granularity, and our SQLite cache
+ * is keyed (ticker, date) which collides for intraday.
+ *
+ * Bypasses yahoo-finance2's typed wrapper and goes through the raw URL since
+ * the typed `chart()` narrows interval to a small set.
+ */
+export const fetchBars = async (
+  ticker: string,
+  interval: string,
+  range: string,
+): Promise<YahooBarPoint[]> => {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+    `?interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (girotracker)",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`Yahoo ${res.status}: ${await res.text()}`);
+  }
+  const json = (await res.json()) as {
+    chart: {
+      result?: Array<{
+        timestamp?: number[];
+        indicators?: {
+          quote?: Array<{
+            close?: Array<number | null>;
+            open?: Array<number | null>;
+            high?: Array<number | null>;
+            low?: Array<number | null>;
+          }>;
+        };
+      }>;
+      error?: { description: string } | null;
+    };
+  };
+  if (json.chart?.error) throw new Error(`Yahoo: ${json.chart.error.description}`);
+  const result = json.chart?.result?.[0];
+  if (!result) return [];
+  const ts = result.timestamp ?? [];
+  const q = result.indicators?.quote?.[0];
+  const bars: YahooBarPoint[] = [];
+  for (let i = 0; i < ts.length; i++) {
+    const close = q?.close?.[i];
+    if (close == null) continue;
+    bars.push({
+      time: new Date(ts[i] * 1000).toISOString(),
+      open: q?.open?.[i] ?? null,
+      high: q?.high?.[i] ?? null,
+      low: q?.low?.[i] ?? null,
+      close,
     });
   }
   return bars;

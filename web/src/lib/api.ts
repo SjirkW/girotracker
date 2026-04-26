@@ -9,6 +9,7 @@ export type TickerLookupResult = {
 export type PricePoint = {
   date: string;
   close: number;
+  open?: number | null;
   high?: number | null;
   low?: number | null;
   currency: string | null;
@@ -69,6 +70,32 @@ export type QuoteResult = {
   // picker (1D / 5D / 10D).
   bars: Array<{ date: string; close: number }>;
   error?: string;
+};
+
+export type BarPoint = {
+  time: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number;
+};
+
+/**
+ * OHLC bars at any (interval, range) Yahoo supports. Powers the candle
+ * chart's range × granularity matrix. Uncached — every call hits Yahoo.
+ */
+export const fetchBars = async (
+  ticker: string,
+  interval: string,
+  range: string,
+): Promise<BarPoint[]> => {
+  const res = await fetch("/api/bars", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticker, interval, range }),
+  });
+  const out = await json<{ bars: BarPoint[] }>(res);
+  return out.bars;
 };
 
 /**

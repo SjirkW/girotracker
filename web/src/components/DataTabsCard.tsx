@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HoldingsTab } from "@/components/tabs/HoldingsTab";
 import { LiveTab } from "@/components/tabs/LiveTab";
+import { CandlesTab } from "@/components/tabs/CandlesTab";
 import { StopLossTab } from "@/components/tabs/StopLossTab";
 import { CurrencyTab } from "@/components/tabs/CurrencyTab";
 import { TickersTab } from "@/components/tabs/TickersTab";
@@ -80,7 +81,8 @@ export function DataTabsCard({
     if (
       activeTab === "stoploss" ||
       activeTab === "currency" ||
-      activeTab === "live"
+      activeTab === "live" ||
+      activeTab === "candles"
     )
       return null;
     const placeholder =
@@ -113,6 +115,7 @@ export function DataTabsCard({
               <TabsList>
                 <TabsTrigger value="holdings">Holdings</TabsTrigger>
                 <TabsTrigger value="live">Live</TabsTrigger>
+                <TabsTrigger value="candles">Candles</TabsTrigger>
                 <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
                 <TabsTrigger value="currency">Currency</TabsTrigger>
                 <TabsTrigger value="tickers">
@@ -181,6 +184,13 @@ export function DataTabsCard({
               hasValuation={valuation.length > 0}
               lifetimeHoldings={lifetimeHoldings}
               privacy={privacy}
+            />
+          </TabsContent>
+
+          <TabsContent value="candles" className="mt-4 space-y-3">
+            <CandlesTab
+              hasValuation={valuation.length > 0}
+              lifetimeHoldings={lifetimeHoldings}
             />
           </TabsContent>
 
