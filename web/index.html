@@ -5,7 +5,32 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>GIROTRACKER</title>
+    <title>GIROTRACKER — DEGIRO portfolio value & returns over time</title>
+    <meta
+      name="description"
+      content="Free web app that turns a DEGIRO Transactions.csv export into an interactive view of your portfolio's value and returns over time, with stop-loss suggestions, S&amp;P 500 benchmark overlay, time-weighted return, currency exposure, and live prices via Yahoo Finance. Runs entirely in your browser."
+    />
+    <link rel="canonical" href="https://tracker.girotools.workers.dev/" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph / social -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://tracker.girotools.workers.dev/" />
+    <meta property="og:title" content="GIROTRACKER — DEGIRO portfolio tracker" />
+    <meta
+      property="og:description"
+      content="Visualise your DEGIRO portfolio's value and returns over time. Free, runs in your browser, no account needed."
+    />
+    <meta property="og:site_name" content="GIROTRACKER" />
+
+    <!-- Twitter card -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="GIROTRACKER — DEGIRO portfolio tracker" />
+    <meta
+      name="twitter:description"
+      content="Visualise your DEGIRO portfolio's value and returns over time. Free, runs in your browser."
+    />
+
     <script>
       (function () {
         var mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -18,7 +43,24 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Pre-hydration content visible to crawlers and on slow connections.
+           React replaces this entire subtree once the bundle loads. -->
+      <noscript>
+        This app needs JavaScript to compute and chart your portfolio.
+      </noscript>
+      <main style="max-width: 64rem; margin: 0 auto; padding: 1rem; font-family: system-ui, -apple-system, sans-serif;">
+        <h1 style="font-size: 1.875rem; font-weight: 600; letter-spacing: -0.025em;">GIROTRACKER</h1>
+        <p style="color: #6b7280; font-size: 0.875rem;">DEGIRO portfolio value over time</p>
+        <p style="margin-top: 1rem; max-width: 42rem;">
+          Upload your DEGIRO <code>Transactions.csv</code> export to see your
+          portfolio's value and returns over time, sorted holdings, suggested
+          stop-loss levels, currency exposure, and live prices — all rendered
+          locally in your browser.
+        </p>
+        <p style="margin-top: 1rem; color: #6b7280; font-size: 0.875rem;">Loading…</p>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
