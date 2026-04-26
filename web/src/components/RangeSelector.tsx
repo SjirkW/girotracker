@@ -217,11 +217,18 @@ export const RangeSelector = ({
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent hover:text-accent-foreground")
             }
+            title={
+              isCustomActive && customRange.from && customRange.to
+                ? `${fmtMedium(customRange.from)} – ${fmtMedium(customRange.to)}`
+                : "Custom range"
+            }
           >
             <CalendarIcon className="h-3.5 w-3.5" />
-            {isCustomActive && customRange.from && customRange.to
-              ? `${fmtMedium(customRange.from)} – ${fmtMedium(customRange.to)}`
-              : "Custom"}
+            <span className="hidden sm:inline">
+              {isCustomActive && customRange.from && customRange.to
+                ? `${fmtMedium(customRange.from)} – ${fmtMedium(customRange.to)}`
+                : "Custom"}
+            </span>
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0" align="end">

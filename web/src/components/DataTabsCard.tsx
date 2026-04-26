@@ -103,19 +103,21 @@ export function DataTabsCard({
       <CardContent>
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <div className="flex items-center justify-between gap-3">
-            <TabsList>
-              <TabsTrigger value="holdings">Holdings</TabsTrigger>
-              <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
-              <TabsTrigger value="currency">Currency</TabsTrigger>
-              <TabsTrigger value="tickers">
-                Tickers
-                {tickers.length > 0 &&
-                  ` (${tickers.length - unresolvedCount}/${tickers.length})`}
-              </TabsTrigger>
-              <TabsTrigger value="transactions">
-                Transactions ({transactions.length})
-              </TabsTrigger>
-            </TabsList>
+            <div className="min-w-0 flex-1 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <TabsList>
+                <TabsTrigger value="holdings">Holdings</TabsTrigger>
+                <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
+                <TabsTrigger value="currency">Currency</TabsTrigger>
+                <TabsTrigger value="tickers">
+                  Tickers
+                  {tickers.length > 0 &&
+                    ` (${tickers.length - unresolvedCount}/${tickers.length})`}
+                </TabsTrigger>
+                <TabsTrigger value="transactions">
+                  Transactions ({transactions.length})
+                </TabsTrigger>
+              </TabsList>
+            </div>
             {/* Inline filter on viewports wide enough to fit it next to the
                 tabs; on narrower screens, each tab's content shows its own
                 filter input below. The eye sits left of the search on desktop;
