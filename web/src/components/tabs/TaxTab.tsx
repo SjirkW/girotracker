@@ -26,7 +26,8 @@ type Row = {
   endValueEur: number | null;
   netDepositedEur: number; // sum of (−totalEur) for buys minus sells
   capitalReturnEur: number | null; // endValue − startValue − netDeposited
-  capitalReturnPct: number | null; // capitalReturnEur / startValueEur
+  taxReturnPct: number | null; // capitalReturnEur / startValueEur (naive, matches tax framework)
+  twrPct: number | null; // time-weighted return (Modified Dietz, daily-chained)
 };
 
 /**
@@ -98,13 +99,20 @@ export function TaxTab({
           ? endValue - startValue - netDeposited
           : null;
 
-      // Return % via TWR (Modified Dietz, daily-chained) — handles
-      // intra-year deposits properly so a year with a tiny start value and
-      // big mid-year deposits doesn't produce a -138% phantom.
+      // Two return %s:
+      //  - Tax %: naive capital_return / start_value. Mirrors how the
+      //    Belastingdienst implicitly frames the rendement (relative to
+      //    peildatum wealth). Undefined when start = 0 (not invested yet).
+      //  - TWR %: Modified Dietz, daily-chained — adjusts for the timing
+      //    of deposits so it's directly comparable to an index.
       const twrFrom = peildatumIsBeforeData ? startDay!.date : yearStart;
       const twrTo = endDay?.date ?? yearEnd;
-      const capitalReturnPct =
+      const twrPct =
         endDay && startDay ? computeTwr(valuation, cfByDate, twrFrom, twrTo) : null;
+      const taxReturnPct =
+        capitalReturn != null && startValue != null && startValue > 0
+          ? capitalReturn / startValue
+          : null;
 
       out.push({
         year,
@@ -114,7 +122,8 @@ export function TaxTab({
         endValueEur: endValue,
         netDepositedEur: netDeposited,
         capitalReturnEur: capitalReturn,
-        capitalReturnPct,
+        taxReturnPct,
+        twrPct,
       });
     }
     return out;
@@ -159,7 +168,12 @@ export function TaxTab({
                   werkelijk rendement
                 </div>
               </TableHead>
-              <TableHead className="text-right">Return %</TableHead>
+              <TableHead className="text-right">
+                Return %
+                <div className="text-[10px] font-normal text-muted-foreground">
+                  tax / TWR
+                </div>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -208,22 +222,42 @@ export function TaxTab({
                       ? `${r.capitalReturnEur >= 0 ? "+" : ""}${fmtEur(r.capitalReturnEur)}`
                       : "—"}
                 </TableCell>
-                <TableCell
-                  className={
-                    "text-right tabular-nums " +
-                    (r.capitalReturnPct == null
-                      ? ""
-                      : r.capitalReturnPct >= 0
-                        ? "text-emerald-500"
-                        : "text-red-500")
-                  }
-                >
-                  {r.capitalReturnPct != null
-                    ? `${r.capitalReturnPct >= 0 ? "+" : ""}${(r.capitalReturnPct * 100).toLocaleString(
-                        "nl-NL",
-                        { minimumFractionDigits: 2, maximumFractionDigits: 2 },
-                      )}%`
-                    : "—"}
+                <TableCell className="text-right tabular-nums">
+                  <div
+                    className={
+                      "font-medium " +
+                      (r.taxReturnPct == null
+                        ? "text-muted-foreground"
+                        : r.taxReturnPct >= 0
+                          ? "text-emerald-500"
+                          : "text-red-500")
+                    }
+                  >
+                    {r.taxReturnPct != null
+                      ? `${r.taxReturnPct >= 0 ? "+" : ""}${(r.taxReturnPct * 100).toLocaleString(
+                          "nl-NL",
+                          { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+                        )}%`
+                      : "—"}
+                  </div>
+                  <div
+                    className={
+                      "text-[11px] " +
+                      (r.twrPct == null
+                        ? "text-muted-foreground"
+                        : r.twrPct >= 0
+                          ? "text-emerald-500/70"
+                          : "text-red-500/70")
+                    }
+                    title="Time-weighted return (Modified Dietz)"
+                  >
+                    {r.twrPct != null
+                      ? `${r.twrPct >= 0 ? "+" : ""}${(r.twrPct * 100).toLocaleString(
+                          "nl-NL",
+                          { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+                        )}% TWR`
+                      : ""}
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -233,10 +267,15 @@ export function TaxTab({
       <p className="text-xs text-muted-foreground max-w-2xl">
         <span className="font-medium">Capital return (€)</span> = year-end
         value − Jan 1 value − net deposited during the year. The{" "}
-        <span className="font-medium">Return %</span> is a time-weighted
-        return (Modified Dietz, daily-chained) so a year with a small Jan 1
-        balance and big mid-year deposits doesn't produce a phantom
-        triple-digit figure.{" "}
+        <span className="font-medium">Return %</span> column shows two
+        figures: the bold one is the naive{" "}
+        <code>capital_return / Jan 1 value</code> — the implicit framing of
+        the Belastingdienst, since the gov taxes the EUR amount relative to
+        peildatum wealth. Below it, the smaller{" "}
+        <span className="font-medium">TWR</span> figure is a time-weighted
+        return (Modified Dietz, daily-chained) — it adjusts for when in the
+        year deposits happened, so it's directly comparable to an index but{" "}
+        <em>not</em> what the gov uses.{" "}
         <span className="font-medium">
           Dividends, interest, and broker costs are NOT included
         </span>{" "}
