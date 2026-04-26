@@ -445,6 +445,10 @@ function PortfolioChartImpl({
             }
             width={privacy ? 0 : 36}
           />
+          {/* Animation morphs the line/area between the previous and next
+              datasets on range/mode/benchmark changes. Recharts interpolates
+              by index, so even though the two arrays have different point
+              counts, the eye reads it as a smooth shape morph. */}
           <Area
             type="linear"
             dataKey="value"
@@ -453,7 +457,9 @@ function PortfolioChartImpl({
             fill="url(#portfolioFill)"
             baseValue="dataMin"
             dot={false}
-            isAnimationActive={false}
+            isAnimationActive
+            animationDuration={400}
+            animationEasing="ease-out"
             activeDot={false}
           />
           {benchmark && benchmark.length > 0 && (
@@ -464,7 +470,9 @@ function PortfolioChartImpl({
               strokeWidth={1.5}
               strokeDasharray="4 4"
               dot={false}
-              isAnimationActive={false}
+              isAnimationActive
+              animationDuration={400}
+              animationEasing="ease-out"
               activeDot={false}
               connectNulls
             />
