@@ -63,7 +63,7 @@ const fmtFullDate = (iso: string): string => {
 
 const STORAGE_KEY = "girotracker:session:v1";
 
-type NativePrice = { price: number; currency: string };
+type NativePrice = { price: number; currency: string; atr?: number | null };
 
 type PersistedSession = {
   fileName: string | null;
@@ -71,6 +71,40 @@ type PersistedSession = {
   tickers: TickerLookupResult[];
   valuation: ValuationDay[];
   nativePrices?: Record<string, NativePrice>;
+};
+
+/**
+ * Wilder's ATR(period) on a sequence of OHLC bars (oldest → newest).
+ *
+ * True Range = max(high − low, |high − prevClose|, |low − prevClose|).
+ * The first ATR is a simple average of the first `period` true ranges; each
+ * subsequent ATR is `(prevATR * (period-1) + TR) / period` (Wilder's smoothing).
+ *
+ * Returns null when there aren't enough complete OHLC bars (≥ period+1).
+ */
+const computeAtr = (
+  bars: Array<{ close: number; high: number | null; low: number | null }>,
+  period = 14,
+): number | null => {
+  const usable = bars.filter((b) => b.high != null && b.low != null);
+  if (usable.length < period + 1) return null;
+  const trs: number[] = [];
+  for (let i = 1; i < usable.length; i++) {
+    const cur = usable[i];
+    const prevClose = usable[i - 1].close;
+    const tr = Math.max(
+      cur.high! - cur.low!,
+      Math.abs(cur.high! - prevClose),
+      Math.abs(cur.low! - prevClose),
+    );
+    trs.push(tr);
+  }
+  if (trs.length < period) return null;
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return atr;
 };
 
 const loadSession = (): PersistedSession | null => {
@@ -175,6 +209,8 @@ function App() {
   const [stopLossPct, setStopLossPct] = useState(15);
   const [stopLossMinReturnPct, setStopLossMinReturnPct] = useState(25);
   const [stopLossCcy, setStopLossCcy] = useState<"native" | "eur">("native");
+  const [stopLossMethod, setStopLossMethod] = useState<"pct" | "atr">("pct");
+  const [atrMultiplier, setAtrMultiplier] = useState(2.5);
 
   // Restore previous session on first mount.
   useEffect(() => {
@@ -268,6 +304,10 @@ function App() {
 
       setStatus({ phase: "prices", done: 0, total: tickersToFetch.length });
       const priceResults = await fetchPricesBatch(tickersToFetch, fromDate, toDate);
+      // Per-ticker ATR(14) on the most recent ~60 bars in native currency —
+      // used for the Stop loss tab. The same currency-normalization (e.g.
+      // GBp → GBP) is applied so high/low scale matches close.
+      const atrByTicker = new Map<string, number>();
       for (const r of priceResults) {
         if (r.error) {
           console.warn(`prices failed for ${r.ticker}:`, r.error);
@@ -276,10 +316,21 @@ function App() {
         }
         const normalized = r.prices.map((p) => {
           const n = normalizePriceCurrency(p.close, p.currency);
-          return { date: p.date, close: n.close, currency: n.currency };
+          // GBp → GBP scaling on close also has to apply to high/low so the
+          // OHLC bar stays internally consistent.
+          const scale = p.close > 0 ? n.close / p.close : 1;
+          return {
+            date: p.date,
+            close: n.close,
+            high: p.high != null ? p.high * scale : null,
+            low: p.low != null ? p.low * scale : null,
+            currency: n.currency,
+          };
         });
         if (normalized.length > 0) {
           currencyByTicker.set(r.ticker, normalized[0].currency);
+          const atr = computeAtr(normalized.slice(-60), 14);
+          if (atr != null) atrByTicker.set(r.ticker, atr);
         }
         pricesByTicker.set(r.ticker, forwardFillDaily(normalized, priceDates));
       }
@@ -329,9 +380,9 @@ function App() {
       });
       setValuation(valuation);
 
-      // Capture latest native (ticker-currency) close per ISIN — this is what
-      // a broker stop-loss order takes, since orders are priced in the
-      // listing's currency, not the user's home currency.
+      // Capture latest native (ticker-currency) close + ATR per ISIN — this
+      // is what a broker stop-loss order takes, since orders are priced in
+      // the listing's currency, not the user's home currency.
       const nativeByIsin: Record<string, NativePrice> = {};
       for (const [isin, ticker] of isinToTicker) {
         const series = pricesByTicker.get(ticker);
@@ -343,10 +394,15 @@ function App() {
         for (const d of series.keys()) if (d > latestDate) latestDate = d;
         const price = series.get(latestDate);
         if (price == null) continue;
-        nativeByIsin[isin] = { price, currency: ccy };
+        nativeByIsin[isin] = {
+          price,
+          currency: ccy,
+          atr: atrByTicker.get(ticker) ?? null,
+        };
       }
+      const withAtr = Object.values(nativeByIsin).filter((n) => n.atr != null).length;
       console.log(
-        `[stoploss] captured native prices for ${Object.keys(nativeByIsin).length}/${isinToTicker.size} tickers`,
+        `[stoploss] captured native prices for ${Object.keys(nativeByIsin).length}/${isinToTicker.size} tickers (${withAtr} with ATR)`,
         nativeByIsin,
       );
       setNativePrices(nativeByIsin);
@@ -491,13 +547,27 @@ function App() {
       .map((h) => {
         const native = nativePrices[h.isin] ?? null;
         const pricePerShareEur = h.valueEur / h.quantity;
-        const stopPricePerShareEur = pricePerShareEur * (1 - stopFrac);
-        const valueAtStopEur = h.valueEur * (1 - stopFrac);
+        const nativePrice = native?.price ?? null;
+        const nativeAtr = native?.atr ?? null;
+
+        // ATR-based drop is computed in native units, then converted into a
+        // fractional drop so the same fraction can be applied to EUR too.
+        // Falls back to the fixed % when ATR isn't available for this ticker.
+        let atrFrac: number | null = null;
+        if (nativePrice != null && nativeAtr != null && nativePrice > 0) {
+          atrFrac = (atrMultiplier * nativeAtr) / nativePrice;
+        }
+        const usingAtr = stopLossMethod === "atr" && atrFrac != null;
+        const dropFrac = usingAtr ? atrFrac! : stopFrac;
+
+        const stopPricePerShareEur = pricePerShareEur * (1 - dropFrac);
+        const valueAtStopEur = h.valueEur * (1 - dropFrac);
         const investedNetEur = h.valueEur - h.returnEur;
         const lockedReturnEur = valueAtStopEur - investedNetEur;
         const lockedReturnPct = h.investedEur > 0 ? lockedReturnEur / h.investedEur : 0;
-        const nativePrice = native?.price ?? null;
-        const nativeStopPrice = nativePrice != null ? nativePrice * (1 - stopFrac) : null;
+        const nativeStopPrice =
+          nativePrice != null ? nativePrice * (1 - dropFrac) : null;
+
         return {
           ...h,
           pricePerShareEur,
@@ -507,10 +577,13 @@ function App() {
           nativePrice,
           nativeStopPrice,
           nativeCurrency: native?.currency ?? null,
+          nativeAtr,
+          dropFrac,
+          usingAtr,
         };
       })
       .sort((a, b) => b.returnPct - a.returnPct);
-  }, [lifetimeHoldings, stopLossPct, stopLossMinReturnPct, nativePrices]);
+  }, [lifetimeHoldings, stopLossPct, stopLossMinReturnPct, stopLossMethod, atrMultiplier, nativePrices]);
 
   const [sort, setSort] = useState<{ key: HoldingSortKey; dir: "asc" | "desc" }>({
     key: "valueEur",
@@ -1052,22 +1125,64 @@ function App() {
                         </div>
                         <div>
                           <label className="text-xs text-muted-foreground block mb-1">
-                            Trailing stop %
+                            Method
                           </label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={50}
-                            step={1}
-                            value={stopLossPct}
-                            onChange={(e) =>
-                              setStopLossPct(
-                                Math.min(50, Math.max(1, Number(e.target.value) || 1)),
-                              )
-                            }
-                            className="w-24"
-                          />
+                          <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
+                            {(["pct", "atr"] as const).map((m) => (
+                              <button
+                                key={m}
+                                onClick={() => setStopLossMethod(m)}
+                                className={
+                                  "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
+                                  (stopLossMethod === m
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground")
+                                }
+                              >
+                                {m === "pct" ? "Fixed %" : "ATR"}
+                              </button>
+                            ))}
+                          </div>
                         </div>
+                        {stopLossMethod === "pct" ? (
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">
+                              Trailing stop %
+                            </label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={50}
+                              step={1}
+                              value={stopLossPct}
+                              onChange={(e) =>
+                                setStopLossPct(
+                                  Math.min(50, Math.max(1, Number(e.target.value) || 1)),
+                                )
+                              }
+                              className="w-24"
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="text-xs text-muted-foreground block mb-1">
+                              ATR × multiplier
+                            </label>
+                            <Input
+                              type="number"
+                              min={0.5}
+                              max={10}
+                              step={0.5}
+                              value={atrMultiplier}
+                              onChange={(e) =>
+                                setAtrMultiplier(
+                                  Math.min(10, Math.max(0.5, Number(e.target.value) || 0.5)),
+                                )
+                              }
+                              className="w-24"
+                            />
+                          </div>
+                        )}
                         <div>
                           <label className="text-xs text-muted-foreground block mb-1">
                             Currency
@@ -1091,9 +1206,9 @@ function App() {
                         </div>
                         <p className="text-xs text-muted-foreground max-w-md">
                           Showing positions up {stopLossMinReturnPct}% or more.
-                          Suggested stop loss is {stopLossPct}% below the current
-                          price — locks in most of the gain while leaving room for
-                          normal volatility.
+                          {stopLossMethod === "pct"
+                            ? ` Stop loss is ${stopLossPct}% below the current price.`
+                            : ` Stop loss is ${atrMultiplier}× ATR(14) below the current price — adapts to each stock's volatility (typical multipliers: 2–3).`}
                         </p>
                       </div>
                       {stopLossCcy === "native" &&
@@ -1117,6 +1232,7 @@ function App() {
                                 <TableHead className="text-right">Price</TableHead>
                                 <TableHead className="text-right">Return %</TableHead>
                                 <TableHead className="text-right">Stop loss</TableHead>
+                                <TableHead className="text-right">Drop</TableHead>
                                 <TableHead className="text-right">Locked-in return</TableHead>
                                 <TableHead>Ticker</TableHead>
                               </TableRow>
@@ -1154,6 +1270,22 @@ function App() {
                                       : stopLossCcy === "native" && r.nativeStopPrice != null
                                         ? `${fmtNum(r.nativeStopPrice, 2)} ${r.nativeCurrency}`
                                         : `${fmtNum(r.stopPricePerShareEur, 2)} EUR`}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                                    -
+                                    {(r.dropFrac * 100).toLocaleString("nl-NL", {
+                                      minimumFractionDigits: 1,
+                                      maximumFractionDigits: 1,
+                                    })}
+                                    %
+                                    {stopLossMethod === "atr" && !r.usingAtr && (
+                                      <span
+                                        className="text-amber-500 ml-1"
+                                        title="No ATR data — using fixed % fallback"
+                                      >
+                                        *
+                                      </span>
+                                    )}
                                   </TableCell>
                                   <TableCell
                                     className={

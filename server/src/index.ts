@@ -149,6 +149,8 @@ app.post("/api/prices", async (req: Request, res: Response) => {
             ticker,
             date: b.date,
             close: b.close,
+            high: b.high,
+            low: b.low,
             currency: b.currency,
           })),
         );
@@ -164,6 +166,8 @@ app.post("/api/prices", async (req: Request, res: Response) => {
     const prices = getCachedPrices(ticker, from, to).map((p) => ({
       date: p.date,
       close: p.close,
+      high: p.high,
+      low: p.low,
       currency: p.currency,
     }));
     return { ticker, prices };

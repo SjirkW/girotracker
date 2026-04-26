@@ -37,10 +37,12 @@ const getPricesStmt = db.prepare<[string, string, string], PriceRow>(
   "SELECT * FROM prices WHERE ticker = ? AND date >= ? AND date <= ? ORDER BY date ASC",
 );
 const insertPriceStmt = db.prepare(
-  `INSERT INTO prices (ticker, date, close, currency)
-   VALUES (@ticker, @date, @close, @currency)
+  `INSERT INTO prices (ticker, date, close, high, low, currency)
+   VALUES (@ticker, @date, @close, @high, @low, @currency)
    ON CONFLICT(ticker, date) DO UPDATE SET
      close = excluded.close,
+     high = excluded.high,
+     low = excluded.low,
      currency = excluded.currency`,
 );
 const insertPricesTx = db.transaction((rows: PriceRow[]) => {
@@ -86,12 +88,20 @@ export const recordFetch = (
   });
 };
 
+const countMissingHighStmt = db.prepare<[string, string, string], { c: number }>(
+  "SELECT COUNT(*) AS c FROM prices WHERE ticker = ? AND date >= ? AND date <= ? AND high IS NULL",
+);
+
 /**
  * Given a requested [from, to] window for a ticker, return the sub-windows
  * that are NOT yet covered by previous fetches. We treat any date <= today
  * as final (markets close), so historic gaps never need re-fetching, only
  * gaps at the head/tail of what we already have. Empty window means: nothing
  * to fetch, cache is sufficient.
+ *
+ * Also forces a refresh of the trailing 30-day window when any cached row in
+ * that window is missing high/low (added later than close). This lets ATR
+ * work without nuking the whole cache after the schema upgrade.
  */
 export const computeMissingRanges = (
   ticker: string,
@@ -119,6 +129,19 @@ export const computeMissingRanges = (
       to: effTo,
     });
   }
+
+  // Backfill trailing OHLC if missing in the last 30 days (enough for ATR(14)
+  // plus a little slack). Skip when the requested range doesn't even reach
+  // back that far.
+  const ohlcWindowFrom = addDays(effTo, -30);
+  const backfillFrom = ohlcWindowFrom < fromDate ? fromDate : ohlcWindowFrom;
+  if (backfillFrom <= effTo) {
+    const row = countMissingHighStmt.get(ticker, backfillFrom, effTo);
+    if (row && row.c > 0) {
+      ranges.push({ from: backfillFrom, to: effTo });
+    }
+  }
+
   return ranges;
 };
 

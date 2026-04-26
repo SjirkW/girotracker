@@ -23,7 +23,13 @@ interface Env {
 
 type PriceBatchResult = {
   ticker: string;
-  prices: Array<{ date: string; close: number; currency: string | null }>;
+  prices: Array<{
+    date: string;
+    close: number;
+    high: number | null;
+    low: number | null;
+    currency: string | null;
+  }>;
   error?: string;
 };
 
@@ -90,6 +96,8 @@ const handleApi = async (
             prices: bars.map((b) => ({
               date: b.date,
               close: b.close,
+              high: b.high,
+              low: b.low,
               currency: b.currency,
             })),
           };

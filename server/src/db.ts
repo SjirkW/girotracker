@@ -23,6 +23,8 @@ db.exec(`
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
     close REAL NOT NULL,
+    high REAL,
+    low REAL,
     currency TEXT,
     PRIMARY KEY (ticker, date)
   );
@@ -34,6 +36,19 @@ db.exec(`
     last_fetched_at TEXT NOT NULL
   );
 `);
+
+// Add high/low columns to pre-existing prices tables (older installs created
+// the table without them). SQLite will throw "duplicate column" if they exist
+// already — swallow that.
+const addColumnIfMissing = (column: string) => {
+  try {
+    db.exec(`ALTER TABLE prices ADD COLUMN ${column} REAL`);
+  } catch (err) {
+    if (!String(err).includes("duplicate column name")) throw err;
+  }
+};
+addColumnIfMissing("high");
+addColumnIfMissing("low");
 
 export type IsinMapRow = {
   isin: string;
@@ -47,6 +62,8 @@ export type PriceRow = {
   ticker: string;
   date: string;
   close: number;
+  high: number | null;
+  low: number | null;
   currency: string | null;
 };
 

@@ -5,6 +5,8 @@ const yf = new YahooFinance();
 export type YahooBar = {
   date: string; // YYYY-MM-DD
   close: number;
+  high: number | null;
+  low: number | null;
   currency: string | null;
 };
 
@@ -33,11 +35,22 @@ export const fetchHistorical = async (
   const bars: YahooBar[] = [];
   for (const q of quotes) {
     if (!q.date) continue;
-    const close = q.adjclose ?? q.close;
+    const rawClose = q.close;
+    const close = q.adjclose ?? rawClose;
     if (close == null) continue;
+    // adjclose folds in splits/dividends; rescale high/low so the bar stays
+    // internally consistent (matters for ATR).
+    const factor =
+      q.adjclose != null && rawClose != null && rawClose > 0
+        ? q.adjclose / rawClose
+        : 1;
+    const high = q.high != null ? q.high * factor : null;
+    const low = q.low != null ? q.low * factor : null;
     bars.push({
       date: new Date(q.date).toISOString().slice(0, 10),
       close,
+      high,
+      low,
       currency,
     });
   }

@@ -9,6 +9,8 @@ export type TickerLookupResult = {
 export type PricePoint = {
   date: string;
   close: number;
+  high?: number | null;
+  low?: number | null;
   currency: string | null;
 };
 

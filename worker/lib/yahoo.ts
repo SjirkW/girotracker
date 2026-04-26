@@ -7,6 +7,8 @@
 export type YahooBar = {
   date: string; // YYYY-MM-DD
   close: number;
+  high: number | null;
+  low: number | null;
   currency: string | null;
 };
 
@@ -16,7 +18,11 @@ type YahooChartResponse = {
       meta?: { currency?: string };
       timestamp?: number[];
       indicators?: {
-        quote?: Array<{ close?: Array<number | null> }>;
+        quote?: Array<{
+          close?: Array<number | null>;
+          high?: Array<number | null>;
+          low?: Array<number | null>;
+        }>;
         adjclose?: Array<{ adjclose?: Array<number | null> }>;
       };
     }>;
@@ -59,16 +65,30 @@ export const fetchHistorical = async (
 
   const currency = result.meta?.currency ?? null;
   const timestamps = result.timestamp ?? [];
-  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  const quote = result.indicators?.quote?.[0];
+  const closes = quote?.close ?? [];
+  const highs = quote?.high ?? [];
+  const lows = quote?.low ?? [];
   const adjcloses = result.indicators?.adjclose?.[0]?.adjclose ?? [];
 
+  // adjclose differs from close by historical splits/dividends; high/low are
+  // raw, so when we surface adjclose we scale highs/lows by the same factor
+  // to keep the bar internally consistent for things like ATR.
   const bars: YahooBar[] = [];
   for (let i = 0; i < timestamps.length; i++) {
-    const close = adjcloses[i] ?? closes[i];
+    const rawClose = closes[i];
+    const close = adjcloses[i] ?? rawClose;
     if (close == null) continue;
+    const factor = adjcloses[i] != null && rawClose != null && rawClose > 0
+      ? adjcloses[i]! / rawClose
+      : 1;
+    const high = highs[i] != null ? highs[i]! * factor : null;
+    const low = lows[i] != null ? lows[i]! * factor : null;
     bars.push({
       date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
       close,
+      high,
+      low,
       currency,
     });
   }
