@@ -143,7 +143,9 @@ function PortfolioChartImpl({
 
     const layout = () => {
       const rect = container.getBoundingClientRect();
-      const yAxisWidth = privacyRef.current ? 0 : 72;
+      // Must match the <YAxis width=...> prop below; if larger, the leftmost
+      // pixels of the plot get treated as "in the axis" and hover is hidden.
+      const yAxisWidth = privacyRef.current ? 0 : 36;
       const plotLeft = yAxisWidth;
       const plotRight = rect.width - 16;
       const plotWidth = Math.max(1, plotRight - plotLeft);
