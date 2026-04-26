@@ -63,11 +63,14 @@ const fmtFullDate = (iso: string): string => {
 
 const STORAGE_KEY = "girotracker:session:v1";
 
+type NativePrice = { price: number; currency: string };
+
 type PersistedSession = {
   fileName: string | null;
   transactions: Transaction[];
   tickers: TickerLookupResult[];
   valuation: ValuationDay[];
+  nativePrices?: Record<string, NativePrice>;
 };
 
 const loadSession = (): PersistedSession | null => {
@@ -152,6 +155,7 @@ function App() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [tickers, setTickers] = useState<TickerLookupResult[]>([]);
   const [valuation, setValuation] = useState<ValuationDay[]>([]);
+  const [nativePrices, setNativePrices] = useState<Record<string, NativePrice>>({});
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -168,6 +172,9 @@ function App() {
   const [txQuery, setTxQuery] = useState("");
   const [activeTab, setActiveTab] = useState("holdings");
   const [hydrated, setHydrated] = useState(false);
+  const [stopLossPct, setStopLossPct] = useState(15);
+  const [stopLossMinReturnPct, setStopLossMinReturnPct] = useState(25);
+  const [stopLossCcy, setStopLossCcy] = useState<"native" | "eur">("native");
 
   // Restore previous session on first mount.
   useEffect(() => {
@@ -177,6 +184,7 @@ function App() {
       setTransactions(s.transactions ?? []);
       setTickers(s.tickers ?? []);
       setValuation(s.valuation ?? []);
+      setNativePrices(s.nativePrices ?? {});
       if (s.valuation && s.valuation.length > 0) setStatus({ phase: "done" });
     }
     setHydrated(true);
@@ -193,8 +201,8 @@ function App() {
       }
       return;
     }
-    saveSession({ fileName, transactions, tickers, valuation });
-  }, [hydrated, fileName, transactions, tickers, valuation]);
+    saveSession({ fileName, transactions, tickers, valuation, nativePrices });
+  }, [hydrated, fileName, transactions, tickers, valuation, nativePrices]);
 
   const fmtPct = (p: number) =>
     `${p >= 0 ? "+" : ""}${(p * 100).toLocaleString("nl-NL", {
@@ -210,6 +218,7 @@ function App() {
     setFileName(file.name);
     setTickers([]);
     setValuation([]);
+    setNativePrices({});
     setStatus({ phase: "idle" });
   };
 
@@ -319,6 +328,28 @@ function App() {
         currencyByTicker,
       });
       setValuation(valuation);
+
+      // Capture latest native (ticker-currency) close per ISIN — this is what
+      // a broker stop-loss order takes, since orders are priced in the
+      // listing's currency, not the user's home currency.
+      const nativeByIsin: Record<string, NativePrice> = {};
+      for (const [isin, ticker] of isinToTicker) {
+        const series = pricesByTicker.get(ticker);
+        const ccy = currencyByTicker.get(ticker);
+        if (!series || series.size === 0 || !ccy) continue;
+        // Use the most recent date in the forward-filled series (Yahoo skips
+        // weekends/holidays so toDate may not be a key).
+        let latestDate = "";
+        for (const d of series.keys()) if (d > latestDate) latestDate = d;
+        const price = series.get(latestDate);
+        if (price == null) continue;
+        nativeByIsin[isin] = { price, currency: ccy };
+      }
+      console.log(
+        `[stoploss] captured native prices for ${Object.keys(nativeByIsin).length}/${isinToTicker.size} tickers`,
+        nativeByIsin,
+      );
+      setNativePrices(nativeByIsin);
       setStatus({ phase: "done" });
     } catch (err) {
       setStatus({ phase: "error", message: (err as Error).message });
@@ -439,6 +470,47 @@ function App() {
       tickerByIsin,
     );
   }, [transactions, valuation, rangeStart, rangeEnd, productByIsin, tickerByIsin]);
+
+  const lifetimeHoldings = useMemo(() => {
+    if (!latest || !earliestDate) return [];
+    return computeHoldings(
+      transactions,
+      valuation,
+      earliestDate,
+      latest.date,
+      productByIsin,
+      tickerByIsin,
+    );
+  }, [transactions, valuation, earliestDate, latest, productByIsin, tickerByIsin]);
+
+  const stopLossRows = useMemo(() => {
+    const stopFrac = stopLossPct / 100;
+    const minFrac = stopLossMinReturnPct / 100;
+    return lifetimeHoldings
+      .filter((h) => h.quantity > 0 && h.valueEur > 0 && h.returnPct >= minFrac)
+      .map((h) => {
+        const native = nativePrices[h.isin] ?? null;
+        const pricePerShareEur = h.valueEur / h.quantity;
+        const stopPricePerShareEur = pricePerShareEur * (1 - stopFrac);
+        const valueAtStopEur = h.valueEur * (1 - stopFrac);
+        const investedNetEur = h.valueEur - h.returnEur;
+        const lockedReturnEur = valueAtStopEur - investedNetEur;
+        const lockedReturnPct = h.investedEur > 0 ? lockedReturnEur / h.investedEur : 0;
+        const nativePrice = native?.price ?? null;
+        const nativeStopPrice = nativePrice != null ? nativePrice * (1 - stopFrac) : null;
+        return {
+          ...h,
+          pricePerShareEur,
+          stopPricePerShareEur,
+          lockedReturnEur,
+          lockedReturnPct,
+          nativePrice,
+          nativeStopPrice,
+          nativeCurrency: native?.currency ?? null,
+        };
+      })
+      .sort((a, b) => b.returnPct - a.returnPct);
+  }, [lifetimeHoldings, stopLossPct, stopLossMinReturnPct, nativePrices]);
 
   const [sort, setSort] = useState<{ key: HoldingSortKey; dir: "asc" | "desc" }>({
     key: "valueEur",
@@ -781,6 +853,7 @@ function App() {
                 <div className="flex items-center justify-between gap-3">
                   <TabsList>
                     <TabsTrigger value="holdings">Holdings</TabsTrigger>
+                    <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
                     <TabsTrigger value="tickers">
                       Tickers
                       {tickers.length > 0 &&
@@ -806,30 +879,32 @@ function App() {
                     >
                       {privacy ? <EyeOff /> : <Eye />}
                     </Button>
-                    <Input
-                      type="search"
-                      placeholder={
-                        activeTab === "tickers"
-                          ? "Filter by ISIN, name, ticker or exchange…"
-                          : activeTab === "transactions"
-                            ? "Filter by date, product, ISIN or currency…"
-                            : "Filter by name, ticker or ISIN…"
-                      }
-                      value={
-                        activeTab === "tickers"
-                          ? tickersQuery
-                          : activeTab === "transactions"
-                            ? txQuery
-                            : holdingsQuery
-                      }
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (activeTab === "tickers") setTickersQuery(v);
-                        else if (activeTab === "transactions") setTxQuery(v);
-                        else setHoldingsQuery(v);
-                      }}
-                      className="hidden md:block max-w-xs"
-                    />
+                    {activeTab !== "stoploss" && (
+                      <Input
+                        type="search"
+                        placeholder={
+                          activeTab === "tickers"
+                            ? "Filter by ISIN, name, ticker or exchange…"
+                            : activeTab === "transactions"
+                              ? "Filter by date, product, ISIN or currency…"
+                              : "Filter by name, ticker or ISIN…"
+                        }
+                        value={
+                          activeTab === "tickers"
+                            ? tickersQuery
+                            : activeTab === "transactions"
+                              ? txQuery
+                              : holdingsQuery
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (activeTab === "tickers") setTickersQuery(v);
+                          else if (activeTab === "transactions") setTxQuery(v);
+                          else setHoldingsQuery(v);
+                        }}
+                        className="hidden md:block max-w-xs"
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -948,6 +1023,168 @@ function App() {
                           </TableBody>
                         </Table>
                       </div>
+                    </>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="stoploss" className="mt-4 space-y-3">
+                  {valuation.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Click "Compute portfolio" to see stop-loss suggestions.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-end gap-4">
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1">
+                            Min return %
+                          </label>
+                          <Input
+                            type="number"
+                            min={0}
+                            step={5}
+                            value={stopLossMinReturnPct}
+                            onChange={(e) =>
+                              setStopLossMinReturnPct(Math.max(0, Number(e.target.value) || 0))
+                            }
+                            className="w-24"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1">
+                            Trailing stop %
+                          </label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={50}
+                            step={1}
+                            value={stopLossPct}
+                            onChange={(e) =>
+                              setStopLossPct(
+                                Math.min(50, Math.max(1, Number(e.target.value) || 1)),
+                              )
+                            }
+                            className="w-24"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground block mb-1">
+                            Currency
+                          </label>
+                          <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
+                            {(["native", "eur"] as const).map((c) => (
+                              <button
+                                key={c}
+                                onClick={() => setStopLossCcy(c)}
+                                className={
+                                  "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
+                                  (stopLossCcy === c
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground")
+                                }
+                              >
+                                {c === "native" ? "Ticker" : "EUR"}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground max-w-md">
+                          Showing positions up {stopLossMinReturnPct}% or more.
+                          Suggested stop loss is {stopLossPct}% below the current
+                          price — locks in most of the gain while leaving room for
+                          normal volatility.
+                        </p>
+                      </div>
+                      {stopLossCcy === "native" &&
+                        Object.keys(nativePrices).length === 0 && (
+                          <p className="text-sm text-amber-500">
+                            Native ticker prices not loaded yet — click "Compute
+                            portfolio" to refresh, or switch to EUR.
+                          </p>
+                        )}
+                      {stopLossRows.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No open positions with return ≥ {stopLossMinReturnPct}%.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <Table className="text-[13px]">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Stock</TableHead>
+                                <TableHead className="text-right">Qty</TableHead>
+                                <TableHead className="text-right">Price</TableHead>
+                                <TableHead className="text-right">Return %</TableHead>
+                                <TableHead className="text-right">Stop loss</TableHead>
+                                <TableHead className="text-right">Locked-in return</TableHead>
+                                <TableHead>Ticker</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {stopLossRows.map((r) => (
+                                <TableRow key={r.isin}>
+                                  <TableCell
+                                    className="max-w-[140px] sm:max-w-[280px] truncate"
+                                    title={r.product}
+                                  >
+                                    {r.product}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    {privacy ? "•••" : fmtNum(r.quantity, 0)}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    {privacy
+                                      ? "•••"
+                                      : stopLossCcy === "native" && r.nativePrice != null
+                                        ? `${fmtNum(r.nativePrice, 2)} ${r.nativeCurrency}`
+                                        : `${fmtNum(r.pricePerShareEur, 2)} EUR`}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums text-emerald-500">
+                                    +
+                                    {(r.returnPct * 100).toLocaleString("nl-NL", {
+                                      minimumFractionDigits: 1,
+                                      maximumFractionDigits: 1,
+                                    })}
+                                    %
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums font-medium">
+                                    {privacy
+                                      ? "•••"
+                                      : stopLossCcy === "native" && r.nativeStopPrice != null
+                                        ? `${fmtNum(r.nativeStopPrice, 2)} ${r.nativeCurrency}`
+                                        : `${fmtNum(r.stopPricePerShareEur, 2)} EUR`}
+                                  </TableCell>
+                                  <TableCell
+                                    className={
+                                      "text-right tabular-nums " +
+                                      (r.lockedReturnPct >= 0
+                                        ? "text-emerald-500"
+                                        : "text-red-500")
+                                    }
+                                  >
+                                    {r.lockedReturnPct >= 0 ? "+" : ""}
+                                    {(r.lockedReturnPct * 100).toLocaleString("nl-NL", {
+                                      minimumFractionDigits: 1,
+                                      maximumFractionDigits: 1,
+                                    })}
+                                    %
+                                    {!privacy && (
+                                      <span className="text-xs text-muted-foreground ml-1">
+                                        ({r.lockedReturnEur >= 0 ? "+" : ""}
+                                        {fmtEur(r.lockedReturnEur)})
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="font-mono text-xs">
+                                    {r.ticker ?? "—"}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
                     </>
                   )}
                 </TabsContent>
