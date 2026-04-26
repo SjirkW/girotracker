@@ -1,8 +1,9 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Line,
-  LineChart,
   ResponsiveContainer,
   XAxis,
   YAxis,
@@ -400,10 +401,20 @@ function PortfolioChartImpl({
       </div>
 
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart
+        <ComposedChart
           data={chartData}
           margin={{ top: 8, right: 16, bottom: 0, left: 0 }}
         >
+          <defs>
+            {/* Google-Finance-style fill: line color at the top, fading to
+                transparent at the bottom. baseValue="dataMin" anchors the
+                gradient to the chart's lowest point so the fill always reaches
+                the X axis even when values dip below zero (Return mode). */}
+            <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.4} />
+              <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
           <XAxis
             dataKey="date"
@@ -420,11 +431,13 @@ function PortfolioChartImpl({
             }
             width={privacy ? 0 : 36}
           />
-          <Line
+          <Area
             type="linear"
             dataKey="value"
             stroke="var(--primary)"
             strokeWidth={2}
+            fill="url(#portfolioFill)"
+            baseValue="dataMin"
             dot={false}
             isAnimationActive={false}
             activeDot={false}
@@ -442,7 +455,7 @@ function PortfolioChartImpl({
               connectNulls
             />
           )}
-        </LineChart>
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
