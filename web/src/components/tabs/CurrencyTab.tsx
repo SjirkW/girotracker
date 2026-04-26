@@ -8,6 +8,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fmtEur } from "@/lib/format";
+import { Blurred } from "@/components/Blurred";
 import type { HoldingRow } from "@/lib/portfolio";
 import type { Transaction } from "@/lib/parseCsv";
 import type { NativePrice } from "@/lib/session";
@@ -97,7 +98,7 @@ export function CurrencyTab({
               <TableRow key={r.currency}>
                 <TableCell className="font-mono text-xs">{r.currency}</TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {privacy ? "•••" : fmtEur(r.valueEur)}
+                  {privacy ? <Blurred /> : fmtEur(r.valueEur)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {(r.pct * 100).toLocaleString("nl-NL", {

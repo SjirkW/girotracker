@@ -8,6 +8,7 @@ import {
   type Range,
 } from "@/components/RangeSelector";
 import { fmtEur, fmtFullDate, fmtPct, today } from "@/lib/format";
+import { Blurred } from "@/components/Blurred";
 import { BENCHMARK_LABEL } from "@/lib/session";
 import {
   buildDailyInvested,
@@ -289,61 +290,50 @@ export function ChartCard({
               ({fmtFullDate(endDay?.date ?? latest.date)})
             </div>
             <div className="flex items-baseline gap-3">
-              {privacy ? (
-                rangeChange && (
-                  <span
-                    className={
-                      "text-3xl font-semibold tabular-nums " +
-                      (rangeChange.pct >= 0
-                        ? "text-emerald-500"
-                        : "text-red-500")
-                    }
-                  >
-                    {fmtPct(rangeChange.pct)}
-                  </span>
-                )
-              ) : (
-                <>
-                  <span
-                    className={
-                      "text-3xl font-semibold tabular-nums " +
-                      (mode === "return"
-                        ? headlineValue >= 0
-                          ? "text-emerald-500"
-                          : "text-red-500"
-                        : "")
-                    }
-                  >
-                    {mode === "return" && headlineValue >= 0 ? "+" : ""}
-                    {fmtEur(headlineValue)}
-                  </span>
-                  {rangeChange && (
-                    <span
-                      className={
-                        "text-base tabular-nums " +
-                        (rangeChange.abs >= 0
-                          ? "text-emerald-500"
-                          : "text-red-500")
-                      }
-                    >
-                      {rangeStart > earliestDate ? (
-                        <>
-                          {rangeChange.abs >= 0 ? "+" : ""}
-                          {fmtEur(rangeChange.abs)} ({fmtPct(rangeChange.pct)})
-                        </>
-                      ) : (
-                        fmtPct(rangeChange.pct)
-                      )}
-                    </span>
+              <span
+                className={
+                  "text-3xl font-semibold tabular-nums " +
+                  (mode === "return"
+                    ? headlineValue >= 0
+                      ? "text-emerald-500"
+                      : "text-red-500"
+                    : "")
+                }
+              >
+                {mode === "return" && headlineValue >= 0 ? "+" : ""}
+                {privacy ? <Blurred /> : fmtEur(headlineValue)}
+              </span>
+              {rangeChange && (
+                <span
+                  className={
+                    "text-base tabular-nums " +
+                    (rangeChange.abs >= 0
+                      ? "text-emerald-500"
+                      : "text-red-500")
+                  }
+                >
+                  {rangeStart > earliestDate ? (
+                    <>
+                      {rangeChange.abs >= 0 ? "+" : ""}
+                      {privacy ? <Blurred /> : fmtEur(rangeChange.abs)} (
+                      {fmtPct(rangeChange.pct)})
+                    </>
+                  ) : (
+                    fmtPct(rangeChange.pct)
                   )}
-                </>
+                </span>
               )}
             </div>
-            {!privacy && mode === "return" && endDay && (
+            {mode === "return" && endDay && (
               <div className="text-xs text-muted-foreground mt-1 tabular-nums">
                 Capital invested:{" "}
-                {fmtEur(investedForChart.get(endDay.date) ?? 0)} · Market value:{" "}
-                {fmtEur(marketValueForDay(endDay))}
+                {privacy ? (
+                  <Blurred />
+                ) : (
+                  fmtEur(investedForChart.get(endDay.date) ?? 0)
+                )}{" "}
+                · Market value:{" "}
+                {privacy ? <Blurred /> : fmtEur(marketValueForDay(endDay))}
                 {twr != null && (
                   <>
                     {" · "}

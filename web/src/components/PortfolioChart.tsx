@@ -194,7 +194,7 @@ function PortfolioChartImpl({
         tooltipDateRef.current.textContent = fmtFullDate(point.date);
       if (tooltipValueRef.current) {
         tooltipValueRef.current.textContent = privacyRef.current
-          ? "•••"
+          ? "888.888"
           : fmtEurRef.current(point.value);
       }
       if (tooltipBenchRef.current) {
@@ -202,7 +202,7 @@ function PortfolioChartImpl({
         if (bench != null) {
           tooltipBenchRef.current.style.display = "";
           tooltipBenchRef.current.textContent = privacyRef.current
-            ? "•••"
+            ? `${benchmarkLabelRef.current ?? "Benchmark"}: 888.888`
             : `${benchmarkLabelRef.current ?? "Benchmark"}: ${fmtEurRef.current(bench)}`;
         } else {
           tooltipBenchRef.current.style.display = "none";
@@ -246,7 +246,10 @@ function PortfolioChartImpl({
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         });
-        dragLabelDeltaRef.current.textContent = `${sign}${fmtEurRef.current(abs)} (${sign}${pctStr}%)`;
+        const eurStr = privacyRef.current
+          ? "888.888"
+          : `${sign}${fmtEurRef.current(abs)}`;
+        dragLabelDeltaRef.current.textContent = `${eurStr} (${sign}${pctStr}%)`;
         dragLabelDeltaRef.current.style.color =
           abs >= 0 ? "rgb(16 185 129)" : "rgb(239 68 68)";
       }
@@ -370,7 +373,10 @@ function PortfolioChartImpl({
         style={{ willChange: "opacity" }}
       >
         <span ref={dragLabelDateRef} className="text-muted-foreground" />
-        <span ref={dragLabelDeltaRef} />
+        <span
+          ref={dragLabelDeltaRef}
+          className={privacy ? "select-none blur-[6px]" : ""}
+        />
       </div>
       {/* Hover cursor — never re-renders. */}
       <div
@@ -392,10 +398,18 @@ function PortfolioChartImpl({
         }}
       >
         <div ref={tooltipDateRef} className="text-muted-foreground" />
-        <div ref={tooltipValueRef} className="font-medium" />
+        <div
+          ref={tooltipValueRef}
+          className={
+            "font-medium " + (privacy ? "select-none blur-[6px]" : "")
+          }
+        />
         <div
           ref={tooltipBenchRef}
-          className="text-muted-foreground"
+          className={
+            "text-muted-foreground " +
+            (privacy ? "select-none blur-[6px]" : "")
+          }
           style={{ display: "none" }}
         />
       </div>

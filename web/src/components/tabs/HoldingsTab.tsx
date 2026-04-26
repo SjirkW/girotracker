@@ -23,6 +23,7 @@ import {
 import type { Transaction } from "@/lib/parseCsv";
 import { fmtEur, fmtNum } from "@/lib/format";
 import { matchesQuery } from "@/lib/filter";
+import { Blurred } from "@/components/Blurred";
 
 type Props = {
   hasValuation: boolean;
@@ -176,7 +177,7 @@ export function HoldingsTab({
                   {h.product}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {privacy ? "•••" : fmtEur(h.valueEur)}
+                  {privacy ? <Blurred /> : fmtEur(h.valueEur)}
                 </TableCell>
                 <TableCell
                   className={
@@ -184,9 +185,11 @@ export function HoldingsTab({
                     (h.returnEur >= 0 ? "text-emerald-500" : "text-red-500")
                   }
                 >
-                  {privacy
-                    ? "•••"
-                    : `${h.returnEur >= 0 ? "+" : ""}${fmtEur(h.returnEur)}`}
+                  {privacy ? (
+                    <Blurred />
+                  ) : (
+                    `${h.returnEur >= 0 ? "+" : ""}${fmtEur(h.returnEur)}`
+                  )}
                 </TableCell>
                 <TableCell
                   className={
@@ -202,10 +205,10 @@ export function HoldingsTab({
                   %
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {privacy ? "•••" : fmtEur(h.investedEur)}
+                  {privacy ? <Blurred /> : fmtEur(h.investedEur)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
+                  {privacy ? <Blurred variant="narrow" /> : fmtNum(h.quantity, 0)}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {h.ticker ?? "—"}

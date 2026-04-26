@@ -16,6 +16,7 @@ import {
 } from "@/components/SortableTh";
 import { fetchQuotes, type QuoteResult } from "@/lib/api";
 import { fmtNum } from "@/lib/format";
+import { Blurred } from "@/components/Blurred";
 import type { HoldingRow } from "@/lib/portfolio";
 
 type LiveSortKey =
@@ -267,7 +268,7 @@ export function LiveTab({ hasValuation, lifetimeHoldings, privacy }: Props) {
                     : "—"}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
+                  {privacy ? <Blurred variant="narrow" /> : fmtNum(h.quantity, 0)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums font-medium">
                   {price != null

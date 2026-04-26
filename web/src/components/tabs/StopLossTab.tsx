@@ -11,6 +11,7 @@ import {
 import type { HoldingRow } from "@/lib/portfolio";
 import type { NativePrice } from "@/lib/session";
 import { fmtEur, fmtNum } from "@/lib/format";
+import { Blurred } from "@/components/Blurred";
 
 type StopLossRow = HoldingRow & {
   pricePerShareEur: number;
@@ -240,14 +241,16 @@ export function StopLossTab({
                     {r.product}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {privacy ? "•••" : fmtNum(r.quantity, 0)}
+                    {privacy ? <Blurred variant="narrow" /> : fmtNum(r.quantity, 0)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {privacy
-                      ? "•••"
-                      : ccy === "native" && r.nativePrice != null
-                        ? `${fmtNum(r.nativePrice, 2)} ${r.nativeCurrency}`
-                        : `${fmtNum(r.pricePerShareEur, 2)} EUR`}
+                    {privacy ? (
+                      <Blurred />
+                    ) : ccy === "native" && r.nativePrice != null ? (
+                      `${fmtNum(r.nativePrice, 2)} ${r.nativeCurrency}`
+                    ) : (
+                      `${fmtNum(r.pricePerShareEur, 2)} EUR`
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-emerald-500">
                     +
@@ -258,11 +261,13 @@ export function StopLossTab({
                     %
                   </TableCell>
                   <TableCell className="text-right tabular-nums font-medium">
-                    {privacy
-                      ? "•••"
-                      : ccy === "native" && r.nativeStopPrice != null
-                        ? `${fmtNum(r.nativeStopPrice, 2)} ${r.nativeCurrency}`
-                        : `${fmtNum(r.stopPricePerShareEur, 2)} EUR`}
+                    {privacy ? (
+                      <Blurred />
+                    ) : ccy === "native" && r.nativeStopPrice != null ? (
+                      `${fmtNum(r.nativeStopPrice, 2)} ${r.nativeCurrency}`
+                    ) : (
+                      `${fmtNum(r.stopPricePerShareEur, 2)} EUR`
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
                     -
@@ -294,12 +299,10 @@ export function StopLossTab({
                       maximumFractionDigits: 1,
                     })}
                     %
-                    {!privacy && (
-                      <span className="text-xs text-muted-foreground ml-1">
-                        ({r.lockedReturnEur >= 0 ? "+" : ""}
-                        {fmtEur(r.lockedReturnEur)})
-                      </span>
-                    )}
+                    <span className="text-xs text-muted-foreground ml-1">
+                      ({r.lockedReturnEur >= 0 ? "+" : ""}
+                      {privacy ? <Blurred /> : fmtEur(r.lockedReturnEur)})
+                    </span>
                   </TableCell>
                   <TableCell className="font-mono text-xs">
                     {r.ticker ?? "—"}
