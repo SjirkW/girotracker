@@ -94,3 +94,96 @@ export const fetchHistorical = async (
   }
   return bars;
 };
+
+export type YahooQuote = {
+  symbol: string;
+  price: number | null;
+  previousClose: number | null;
+  currency: string | null;
+  marketState: string | null;
+  marketTime: number | null;
+  // Last ~10 trading days, oldest → newest. Used by the client to compute
+  // change vs N days back (1D / 5D / 10D pickers).
+  bars: Array<{ date: string; close: number }>;
+};
+
+/**
+ * Latest "live" snapshot for a single ticker, pulled from the chart endpoint.
+ * regularMarketPrice updates intraday without needing Yahoo's v7 quote crumb
+ * cookie. We pull ~10 days of 1d bars so we can derive previousClose
+ * properly: Yahoo's `chartPreviousClose` is "close before the first bar of
+ * the requested range" — NOT yesterday — so it gives stale weekly data with
+ * a narrow range. Instead we take the most recent bar dated strictly before
+ * the latest price's date.
+ */
+export const fetchQuote = async (ticker: string): Promise<YahooQuote> => {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+    `?interval=1d&range=10d`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (girotracker)",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`Yahoo ${res.status}: ${await res.text()}`);
+  }
+  const json = (await res.json()) as YahooChartResponse & {
+    chart: {
+      result?: Array<{
+        meta?: {
+          currency?: string;
+          regularMarketPrice?: number;
+          regularMarketTime?: number;
+          marketState?: string;
+        };
+      }>;
+    };
+  };
+  if (json.chart?.error) {
+    throw new Error(`Yahoo: ${json.chart.error.description}`);
+  }
+  const result = json.chart?.result?.[0];
+  const meta = result?.meta ?? {};
+  const price = meta.regularMarketPrice ?? null;
+  const marketTime = meta.regularMarketTime ?? null;
+  const marketDay =
+    marketTime != null
+      ? new Date(marketTime * 1000).toISOString().slice(0, 10)
+      : null;
+  const timestamps = result?.timestamp ?? [];
+  const closes = result?.indicators?.quote?.[0]?.close ?? [];
+  const bars: Array<{ date: string; close: number }> = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    const close = closes[i];
+    if (close == null) continue;
+    bars.push({
+      date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
+      close,
+    });
+  }
+  let previousClose: number | null = null;
+  for (let i = bars.length - 1; i >= 0; i--) {
+    if (marketDay == null) {
+      if (i < bars.length - 1) {
+        previousClose = bars[i].close;
+        break;
+      }
+      continue;
+    }
+    if (bars[i].date < marketDay) {
+      previousClose = bars[i].close;
+      break;
+    }
+  }
+  return {
+    symbol: ticker,
+    price,
+    previousClose,
+    currency: meta.currency ?? null,
+    marketState: meta.marketState ?? null,
+    marketTime,
+    bars,
+  };
+};

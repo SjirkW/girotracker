@@ -11,7 +11,7 @@
  */
 
 import { lookupIsins } from "./lib/figi";
-import { fetchHistorical } from "./lib/yahoo";
+import { fetchHistorical, fetchQuote, type YahooQuote } from "./lib/yahoo";
 import { errorResponse, jsonResponse, pMapLimit } from "./lib/util";
 
 type AssetsBinding = { fetch: (req: Request) => Promise<Response> };
@@ -106,6 +106,41 @@ const handleApi = async (
             ticker,
             prices: [],
             error: `Yahoo fetch failed for ${ticker} ${from}..${to}: ${(err as Error).message}`,
+          };
+        }
+      },
+    );
+    return jsonResponse({ results });
+  }
+
+  if (url.pathname === "/api/quote" && request.method === "POST") {
+    let body: { tickers?: unknown };
+    try {
+      body = await request.json();
+    } catch {
+      return errorResponse("invalid JSON body", 400);
+    }
+    const { tickers } = body;
+    if (!Array.isArray(tickers) || tickers.some((t) => typeof t !== "string")) {
+      return errorResponse("body must be { tickers: string[] }", 400);
+    }
+    const uniqueTickers = [...new Set(tickers as string[])];
+    const results = await pMapLimit<string, YahooQuote & { error?: string }>(
+      uniqueTickers,
+      8,
+      async (ticker) => {
+        try {
+          return await fetchQuote(ticker);
+        } catch (err) {
+          return {
+            symbol: ticker,
+            price: null,
+            previousClose: null,
+            currency: null,
+            marketState: null,
+            marketTime: null,
+            bars: [],
+            error: `Yahoo quote failed for ${ticker}: ${(err as Error).message}`,
           };
         }
       },

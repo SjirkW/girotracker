@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HoldingsTab } from "@/components/tabs/HoldingsTab";
+import { LiveTab } from "@/components/tabs/LiveTab";
 import { StopLossTab } from "@/components/tabs/StopLossTab";
 import { CurrencyTab } from "@/components/tabs/CurrencyTab";
 import { TickersTab } from "@/components/tabs/TickersTab";
@@ -74,9 +75,14 @@ export function DataTabsCard({
   );
 
   // The shared filter input above the tabs writes into whichever query state
-  // matches the active tab. Stop loss + currency don't need a text filter.
+  // matches the active tab. Stop loss / currency / live don't need a text filter.
   const sharedFilter = (() => {
-    if (activeTab === "stoploss" || activeTab === "currency") return null;
+    if (
+      activeTab === "stoploss" ||
+      activeTab === "currency" ||
+      activeTab === "live"
+    )
+      return null;
     const placeholder =
       activeTab === "tickers"
         ? "Filter by ISIN, name, ticker or exchange…"
@@ -106,6 +112,7 @@ export function DataTabsCard({
             <div className="min-w-0 flex-1 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
               <TabsList>
                 <TabsTrigger value="holdings">Holdings</TabsTrigger>
+                <TabsTrigger value="live">Live</TabsTrigger>
                 <TabsTrigger value="stoploss">Stop loss</TabsTrigger>
                 <TabsTrigger value="currency">Currency</TabsTrigger>
                 <TabsTrigger value="tickers">
@@ -166,6 +173,14 @@ export function DataTabsCard({
               latestDate={latestDate}
               selectedIsin={selectedIsin}
               onSelectIsin={onSelectIsin}
+            />
+          </TabsContent>
+
+          <TabsContent value="live" className="mt-4 space-y-3">
+            <LiveTab
+              hasValuation={valuation.length > 0}
+              lifetimeHoldings={lifetimeHoldings}
+              privacy={privacy}
             />
           </TabsContent>
 

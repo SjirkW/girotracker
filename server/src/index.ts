@@ -10,7 +10,7 @@ import {
   upsertIsin,
 } from "./cache.js";
 import { lookupIsins } from "./figi.js";
-import { fetchHistorical } from "./yahoo.js";
+import { fetchHistorical, fetchQuote, type YahooQuote } from "./yahoo.js";
 
 const app = express();
 app.use(cors());
@@ -173,6 +173,46 @@ app.post("/api/prices", async (req: Request, res: Response) => {
     return { ticker, prices };
   });
 
+  res.json({ results });
+});
+
+/**
+ * POST /api/quote
+ * body: { tickers: string[] }
+ * Returns: { results: [{ symbol, price, previousClose, currency, marketState, marketTime, error? }] }
+ *
+ * Live (intraday) snapshot per ticker. NOT cached — every call hits Yahoo,
+ * since the whole point is "what's the current price". Per-ticker errors are
+ * returned in-band.
+ */
+app.post("/api/quote", async (req: Request, res: Response) => {
+  const { tickers } = req.body ?? {};
+  if (!Array.isArray(tickers) || tickers.some((t) => typeof t !== "string")) {
+    return res.status(400).json({
+      error: "body must be { tickers: string[] }",
+    });
+  }
+  const uniqueTickers = [...new Set(tickers as string[])];
+  const results = await pMapLimit<string, YahooQuote & { error?: string }>(
+    uniqueTickers,
+    8,
+    async (ticker) => {
+      try {
+        return await fetchQuote(ticker);
+      } catch (err) {
+        return {
+          symbol: ticker,
+          price: null,
+          previousClose: null,
+          currency: null,
+          marketState: null,
+          marketTime: null,
+          bars: [],
+          error: `Yahoo quote failed for ${ticker}: ${(err as Error).message}`,
+        };
+      }
+    },
+  );
   res.json({ results });
 });
 

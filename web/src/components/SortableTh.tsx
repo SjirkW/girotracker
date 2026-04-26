@@ -10,21 +10,24 @@ export type HoldingSortKey =
   | "returnEur"
   | "returnPct";
 
-export type SortState = { key: HoldingSortKey; dir: "asc" | "desc" };
+export type SortState<K extends string = HoldingSortKey> = {
+  key: K;
+  dir: "asc" | "desc";
+};
 
-export const SortableTh = ({
+export function SortableTh<K extends string>({
   sortKey,
   sort,
   onToggle,
   align = "left",
   children,
 }: {
-  sortKey: HoldingSortKey;
-  sort: SortState;
-  onToggle: (key: HoldingSortKey) => void;
+  sortKey: K;
+  sort: SortState<K>;
+  onToggle: (key: K) => void;
   align?: "left" | "right";
   children: ReactNode;
-}) => {
+}) {
   const active = sort.key === sortKey;
   const arrow = sort.dir === "desc" ? "↓" : "↑";
   return (
@@ -42,4 +45,17 @@ export const SortableTh = ({
       </button>
     </TableHead>
   );
-};
+}
+
+/**
+ * Reusable toggle: clicking the same key flips direction; switching keys
+ * starts in `desc` (the most useful default for value/return columns).
+ */
+export const makeToggleSort =
+  <K extends string>(setSort: (updater: (s: SortState<K>) => SortState<K>) => void) =>
+  (key: K) =>
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "desc" },
+    );

@@ -57,3 +57,32 @@ export const fetchPricesBatch = async (
   const out = await json<{ results: PriceBatchResult[] }>(res);
   return out.results;
 };
+
+export type QuoteResult = {
+  symbol: string;
+  price: number | null;
+  previousClose: number | null;
+  currency: string | null;
+  marketState: string | null;
+  marketTime: number | null;
+  // Last ~10 trading days, oldest → newest. Powers the Live tab's lookback
+  // picker (1D / 5D / 10D).
+  bars: Array<{ date: string; close: number }>;
+  error?: string;
+};
+
+/**
+ * Live (intraday) snapshot per ticker. Server fans out to Yahoo's chart
+ * endpoint — uncached, so each call hits Yahoo. Per-ticker failures land in
+ * `error` so one bad symbol doesn't sink the whole batch.
+ */
+export const fetchQuotes = async (tickers: string[]): Promise<QuoteResult[]> => {
+  if (tickers.length === 0) return [];
+  const res = await fetch("/api/quote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tickers }),
+  });
+  const out = await json<{ results: QuoteResult[] }>(res);
+  return out.results;
+};
