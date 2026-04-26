@@ -352,14 +352,6 @@ export function ChartCard({
               </div>
             )}
           </div>
-          <RangeSelector
-            value={range}
-            onChange={onRangeChange}
-            customRange={customRange}
-            onCustomChange={onCustomRangeChange}
-            earliestDate={earliestDate}
-            latestDate={latest?.date ?? today()}
-          />
         </div>
         <PortfolioChart
           data={rangeData}
@@ -369,6 +361,16 @@ export function ChartCard({
           benchmark={benchmarkRangeData}
           benchmarkLabel={BENCHMARK_LABEL}
         />
+        <div className="flex justify-center">
+          <RangeSelector
+            value={range}
+            onChange={onRangeChange}
+            customRange={customRange}
+            onCustomChange={onCustomRangeChange}
+            earliestDate={earliestDate}
+            latestDate={latest?.date ?? today()}
+          />
+        </div>
       </CardContent>
     </Card>
   );
