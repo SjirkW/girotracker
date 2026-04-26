@@ -1,23 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { PortfolioChart } from "@/components/PortfolioChart";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Eye, EyeOff, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { type HoldingSortKey } from "@/components/SortableTh";
+import { HoldingsTab } from "@/components/tabs/HoldingsTab";
+import { StopLossTab } from "@/components/tabs/StopLossTab";
+import { CurrencyTab } from "@/components/tabs/CurrencyTab";
+import { TickersTab } from "@/components/tabs/TickersTab";
+import { TransactionsTab } from "@/components/tabs/TransactionsTab";
+import { rangeStartDate, type Range } from "@/components/RangeSelector";
+import { ChartCard, type Mode } from "@/components/ChartCard";
+import { UploadCard } from "@/components/UploadCard";
+import { SummaryCard } from "@/components/SummaryCard";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  RangeSelector,
-  rangeStartDate,
-  type Range,
-} from "@/components/RangeSelector";
+  isBusy,
+  statusMessage,
+  type ComputeStatus,
+} from "@/lib/computeStatus";
 import { fetchPricesBatch, resolveTickers, type TickerLookupResult } from "@/lib/api";
 import { parseDegiroCsv, type Transaction } from "@/lib/parseCsv";
 import {
@@ -33,160 +34,16 @@ import {
   normalizePriceCurrency,
   type ValuationDay,
 } from "@/lib/portfolio";
-
-const fmtNum = (n: number, digits = 2) =>
-  Number.isFinite(n)
-    ? n.toLocaleString("nl-NL", {
-        minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
-      })
-    : "—";
-
-const fmtEur = (n: number) =>
-  n.toLocaleString("nl-NL", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  });
-
-const today = (): string => new Date().toISOString().slice(0, 10);
-
-const fmtFullDate = (iso: string): string => {
-  if (!iso) return "";
-  const d = new Date(`${iso}T00:00:00Z`);
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(d);
-};
-
-const STORAGE_KEY = "girotracker:session:v1";
-
-type NativePrice = { price: number; currency: string; atr?: number | null };
-
-const BENCHMARK_TICKER = "^GSPC";
-const BENCHMARK_LABEL = "S&P 500";
-
-type PersistedSession = {
-  fileName: string | null;
-  transactions: Transaction[];
-  tickers: TickerLookupResult[];
-  valuation: ValuationDay[];
-  nativePrices?: Record<string, NativePrice>;
-  benchmarkSeries?: Record<string, number>;
-};
-
-/**
- * Wilder's ATR(period) on a sequence of OHLC bars (oldest → newest).
- *
- * True Range = max(high − low, |high − prevClose|, |low − prevClose|).
- * The first ATR is a simple average of the first `period` true ranges; each
- * subsequent ATR is `(prevATR * (period-1) + TR) / period` (Wilder's smoothing).
- *
- * Returns null when there aren't enough complete OHLC bars (≥ period+1).
- */
-const computeAtr = (
-  bars: Array<{ close: number; high: number | null; low: number | null }>,
-  period = 14,
-): number | null => {
-  const usable = bars.filter((b) => b.high != null && b.low != null);
-  if (usable.length < period + 1) return null;
-  const trs: number[] = [];
-  for (let i = 1; i < usable.length; i++) {
-    const cur = usable[i];
-    const prevClose = usable[i - 1].close;
-    const tr = Math.max(
-      cur.high! - cur.low!,
-      Math.abs(cur.high! - prevClose),
-      Math.abs(cur.low! - prevClose),
-    );
-    trs.push(tr);
-  }
-  if (trs.length < period) return null;
-  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < trs.length; i++) {
-    atr = (atr * (period - 1) + trs[i]) / period;
-  }
-  return atr;
-};
-
-const loadSession = (): PersistedSession | null => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as PersistedSession;
-  } catch {
-    return null;
-  }
-};
-
-const saveSession = (s: PersistedSession): void => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  } catch {
-    // Quota exceeded or storage unavailable — fail silently.
-  }
-};
-
-const MODES = [
-  { id: "return", label: "Return" },
-  { id: "value", label: "Value" },
-] as const;
-type Mode = (typeof MODES)[number]["id"];
-
-type HoldingSortKey =
-  | "product"
-  | "ticker"
-  | "quantity"
-  | "valueEur"
-  | "investedEur"
-  | "returnEur"
-  | "returnPct";
-
-type SortState = { key: HoldingSortKey; dir: "asc" | "desc" };
-
-const SortableTh = ({
-  sortKey,
-  sort,
-  onToggle,
-  align = "left",
-  children,
-}: {
-  sortKey: HoldingSortKey;
-  sort: SortState;
-  onToggle: (key: HoldingSortKey) => void;
-  align?: "left" | "right";
-  children: ReactNode;
-}) => {
-  const active = sort.key === sortKey;
-  const arrow = sort.dir === "desc" ? "↓" : "↑";
-  return (
-    <TableHead className={align === "right" ? "text-right" : ""}>
-      <button
-        type="button"
-        onClick={() => onToggle(sortKey)}
-        className={
-          "inline-flex items-center gap-0.5 transition-colors " +
-          (active ? "text-foreground" : "hover:text-foreground")
-        }
-      >
-        {children}
-        {active && <span className="text-xs opacity-70">{arrow}</span>}
-      </button>
-    </TableHead>
-  );
-};
-
-type ComputeStatus =
-  | { phase: "idle" }
-  | { phase: "tickers" }
-  | { phase: "prices"; done: number; total: number }
-  | { phase: "fx"; done: number; total: number }
-  | { phase: "computing" }
-  | { phase: "done" }
-  | { phase: "error"; message: string };
+import { computeAtr } from "@/lib/atr";
+import { today } from "@/lib/format";
+import {
+  BENCHMARK_LABEL,
+  BENCHMARK_TICKER,
+  clearSession,
+  loadSession,
+  saveSession,
+  type NativePrice,
+} from "@/lib/session";
 
 function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -198,7 +55,6 @@ function App() {
   const [benchmarkSeries, setBenchmarkSeries] = useState<Record<string, number>>({});
   const [showBenchmark, setShowBenchmark] = useState(false);
   const [status, setStatus] = useState<ComputeStatus>({ phase: "idle" });
-  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [range, setRange] = useState<Range>("MAX");
   const [customRange, setCustomRange] = useState<{ from: string; to: string }>({
@@ -238,21 +94,11 @@ function App() {
   useEffect(() => {
     if (!hydrated) return;
     if (transactions.length === 0 && !fileName) {
-      try {
-        localStorage.removeItem(STORAGE_KEY);
-      } catch {
-        /* ignore */
-      }
+      clearSession();
       return;
     }
     saveSession({ fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries });
   }, [hydrated, fileName, transactions, tickers, valuation, nativePrices, benchmarkSeries]);
-
-  const fmtPct = (p: number) =>
-    `${p >= 0 ? "+" : ""}${(p * 100).toLocaleString("nl-NL", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}%`;
 
   const handleFile = async (file: File) => {
     const text = await file.text();
@@ -542,7 +388,7 @@ function App() {
     const out: Array<{ date: string; value: number }> = [];
     for (const v of valuation) {
       if (v.date > rangeEnd) break;
-      const spx = benchmarkSeries[v.date] ?? lastSpx;
+      const spx: number = benchmarkSeries[v.date] ?? lastSpx;
       const cf = cfByDate.get(v.date) ?? 0;
       if (cf !== 0 && spx != null && spx > 0) {
         units += cf / spx;
@@ -815,27 +661,14 @@ function App() {
                 <Button
                   size="sm"
                   onClick={() => void compute()}
-                  disabled={
-                    status.phase !== "idle" &&
-                    status.phase !== "done" &&
-                    status.phase !== "error"
-                  }
+                  disabled={isBusy(status)}
                 >
                   Recompute
                 </Button>
               </div>
-              {(status.phase === "tickers" ||
-                status.phase === "prices" ||
-                status.phase === "fx" ||
-                status.phase === "computing" ||
-                status.phase === "error") && (
+              {(isBusy(status) || status.phase === "error") && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {status.phase === "tickers" && "Resolving ISINs…"}
-                  {status.phase === "prices" &&
-                    `Fetching prices ${status.done}/${status.total}…`}
-                  {status.phase === "fx" &&
-                    `Fetching FX rates ${status.done}/${status.total}…`}
-                  {status.phase === "computing" && "Computing valuation…"}
+                  {statusMessage(status)}
                   {status.phase === "error" && (
                     <span className="text-destructive">Error: {status.message}</span>
                   )}
@@ -846,251 +679,46 @@ function App() {
         </header>
 
         {valuation.length === 0 && (
-          <Card>
-            <CardContent className="pt-6 space-y-3">
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => fileInputRef.current?.click()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    fileInputRef.current?.click();
-                  }
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOver(false);
-                  const f = e.dataTransfer.files?.[0];
-                  if (f) void handleFile(f);
-                }}
-                className={
-                  "flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring " +
-                  (dragOver
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/50 hover:bg-accent/30")
-                }
-              >
-                <p className="text-sm">
-                  <span className="font-medium text-primary">Click to upload</span> or
-                  drag and drop a CSV
-                </p>
-                <p className="text-xs text-muted-foreground text-center">
-                  In DEGIRO: <span className="font-medium">Inbox → Activity → Transactions</span>,
-                  pick the full date range, then <span className="font-medium">Export → CSV</span>.
-                </p>
-              </div>
-              {fileName && (
-                <p className="text-sm text-muted-foreground">
-                  Loaded <span className="font-medium">{fileName}</span>
-                </p>
-              )}
-              {parseErrors.length > 0 && (
-                <div className="text-sm text-destructive">
-                  {parseErrors.length} parse error
-                  {parseErrors.length === 1 ? "" : "s"}:
-                  <ul className="list-disc list-inside">
-                    {parseErrors.slice(0, 5).map((e, i) => (
-                      <li key={i}>{e}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {transactions.length > 0 && (
-                <div className="flex items-center gap-3">
-                  <Button
-                    onClick={() => void compute()}
-                    disabled={
-                      status.phase !== "idle" &&
-                      status.phase !== "done" &&
-                      status.phase !== "error"
-                    }
-                  >
-                    Compute portfolio
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    {status.phase === "tickers" && "Resolving ISINs…"}
-                    {status.phase === "prices" &&
-                      `Fetching prices ${status.done}/${status.total}…`}
-                    {status.phase === "fx" &&
-                      `Fetching FX rates ${status.done}/${status.total}…`}
-                    {status.phase === "computing" && "Computing valuation…"}
-                    {status.phase === "error" && (
-                      <span className="text-destructive">
-                        Error: {status.message}
-                      </span>
-                    )}
-                  </span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <UploadCard
+            fileName={fileName}
+            parseErrors={parseErrors}
+            hasTransactions={transactions.length > 0}
+            status={status}
+            onFile={(f) => void handleFile(f)}
+            onCompute={() => void compute()}
+            inputRef={fileInputRef}
+          />
         )}
 
         {valuation.length > 0 && latest && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-3">
-              <CardTitle className="flex items-center gap-2 min-w-0">
-                <span className="truncate">
-                  {selectedIsin
-                    ? `${productByIsin.get(selectedIsin) ?? selectedIsin} over time`
-                    : "Portfolio value over time"}
-                </span>
-                {selectedIsin && (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => setSelectedIsin(null)}
-                  >
-                    ← Back
-                  </Button>
-                )}
-              </CardTitle>
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => setPrivacy((p) => !p)}
-                  title={privacy ? "Show values" : "Hide values"}
-                  aria-label={privacy ? "Show values" : "Hide values"}
-                >
-                  {privacy ? <EyeOff /> : <Eye />}
-                </Button>
-                {Object.keys(benchmarkSeries).length > 0 && (
-                  <Button
-                    variant={showBenchmark ? "secondary" : "ghost"}
-                    size="xs"
-                    onClick={() => setShowBenchmark((b) => !b)}
-                    title={`What if you'd put each cash flow into ${BENCHMARK_LABEL} instead`}
-                  >
-                    vs {BENCHMARK_LABEL}
-                  </Button>
-                )}
-                <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
-                  {MODES.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => setMode(m.id)}
-                      className={
-                        "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
-                        (mode === m.id
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground")
-                      }
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex flex-wrap items-end justify-between gap-4">
-                <div>
-                  <div className="text-sm text-muted-foreground">
-                    {selectedIsin
-                      ? mode === "return"
-                        ? "Stock return"
-                        : "Stock value"
-                      : mode === "return"
-                        ? "Total return"
-                        : "Portfolio value"}{" "}
-                    ({fmtFullDate(endDay?.date ?? latest.date)})
-                  </div>
-                  <div className="flex items-baseline gap-3">
-                    {privacy ? (
-                      rangeChange && (
-                        <span
-                          className={
-                            "text-3xl font-semibold tabular-nums " +
-                            (rangeChange.pct >= 0 ? "text-emerald-500" : "text-red-500")
-                          }
-                        >
-                          {fmtPct(rangeChange.pct)}
-                        </span>
-                      )
-                    ) : (
-                      <>
-                        <span
-                          className={
-                            "text-3xl font-semibold tabular-nums " +
-                            (mode === "return"
-                              ? headlineValue >= 0
-                                ? "text-emerald-500"
-                                : "text-red-500"
-                              : "")
-                          }
-                        >
-                          {mode === "return" && headlineValue >= 0 ? "+" : ""}
-                          {fmtEur(headlineValue)}
-                        </span>
-                        {rangeChange && (
-                          <span
-                            className={
-                              "text-base tabular-nums " +
-                              (rangeChange.abs >= 0 ? "text-emerald-500" : "text-red-500")
-                            }
-                          >
-                            {rangeStart > earliestDate ? (
-                              <>
-                                {rangeChange.abs >= 0 ? "+" : ""}
-                                {fmtEur(rangeChange.abs)} ({fmtPct(rangeChange.pct)})
-                              </>
-                            ) : (
-                              fmtPct(rangeChange.pct)
-                            )}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  {!privacy && mode === "return" && endDay && (
-                    <div className="text-xs text-muted-foreground mt-1 tabular-nums">
-                      Capital invested:{" "}
-                      {fmtEur(investedForChart.get(endDay.date) ?? 0)} · Market value:{" "}
-                      {fmtEur(marketValueForDay(endDay))}
-                      {twr != null && (
-                        <>
-                          {" · "}
-                          <span title="Time-weighted return: strips out the timing of deposits, so it's directly comparable to an index">
-                            TWR:{" "}
-                            <span
-                              className={
-                                twr >= 0 ? "text-emerald-500" : "text-red-500"
-                              }
-                            >
-                              {fmtPct(twr)}
-                            </span>
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <RangeSelector
-                  value={range}
-                  onChange={setRange}
-                  customRange={customRange}
-                  onCustomChange={setCustomRange}
-                  earliestDate={earliestDate}
-                  latestDate={latest?.date ?? today()}
-                />
-              </div>
-              <PortfolioChart
-                data={rangeData}
-                privacy={privacy}
-                fmtEur={fmtEur}
-                pctDenomByDate={mode === "return" ? investedForChart : undefined}
-                benchmark={benchmarkRangeData}
-                benchmarkLabel={BENCHMARK_LABEL}
-              />
-            </CardContent>
-          </Card>
+          <ChartCard
+            selectedIsin={selectedIsin}
+            productByIsin={productByIsin}
+            onClearSelection={() => setSelectedIsin(null)}
+            privacy={privacy}
+            onTogglePrivacy={() => setPrivacy((p) => !p)}
+            hasBenchmarkData={Object.keys(benchmarkSeries).length > 0}
+            showBenchmark={showBenchmark}
+            onToggleBenchmark={() => setShowBenchmark((b) => !b)}
+            mode={mode}
+            onModeChange={setMode}
+            endDay={endDay}
+            latest={latest}
+            earliestDate={earliestDate}
+            rangeStart={rangeStart}
+            rangeChange={rangeChange}
+            headlineValue={headlineValue}
+            investedAtEnd={endDay ? investedForChart.get(endDay.date) ?? 0 : 0}
+            marketAtEnd={endDay ? marketValueForDay(endDay) : 0}
+            twr={twr}
+            range={range}
+            onRangeChange={setRange}
+            customRange={customRange}
+            onCustomRangeChange={setCustomRange}
+            rangeData={rangeData}
+            benchmarkRangeData={benchmarkRangeData}
+            pctDenomByDate={mode === "return" ? investedForChart : undefined}
+          />
         )}
 
         {transactions.length > 0 && (
@@ -1157,564 +785,75 @@ function App() {
                 </div>
 
                 <TabsContent value="holdings" className="mt-4 space-y-3">
-                  {valuation.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Click "Compute portfolio" to see per-stock returns.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <Input
-                          type="search"
-                          placeholder="Filter by name, ticker or ISIN…"
-                          value={holdingsQuery}
-                          onChange={(e) => setHoldingsQuery(e.target.value)}
-                          className="md:hidden"
-                        />
-                        <RangeSelector
-                          value={range}
-                          onChange={setRange}
-                          customRange={customRange}
-                          onCustomChange={setCustomRange}
-                          earliestDate={earliestDate}
-                          latestDate={latest?.date ?? today()}
-                        />
-                      </div>
-                      <div className="overflow-x-auto">
-                        <Table className="text-[13px]">
-                          <TableHeader>
-                            <TableRow>
-                              <SortableTh sortKey="product" sort={sort} onToggle={toggleSort}>
-                                Stock
-                              </SortableTh>
-                              <SortableTh sortKey="valueEur" sort={sort} onToggle={toggleSort} align="right">
-                                Value
-                              </SortableTh>
-                              <SortableTh sortKey="returnEur" sort={sort} onToggle={toggleSort} align="right">
-                                Return
-                              </SortableTh>
-                              <SortableTh sortKey="returnPct" sort={sort} onToggle={toggleSort} align="right">
-                                Return %
-                              </SortableTh>
-                              <SortableTh sortKey="investedEur" sort={sort} onToggle={toggleSort} align="right">
-                                Invested
-                              </SortableTh>
-                              <SortableTh sortKey="quantity" sort={sort} onToggle={toggleSort} align="right">
-                                Qty
-                              </SortableTh>
-                              <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
-                                Ticker
-                              </SortableTh>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {sortedHoldings.map((h) => (
-                              <TableRow
-                                key={h.isin}
-                                onClick={() =>
-                                  setSelectedIsin((prev) =>
-                                    prev === h.isin ? null : h.isin,
-                                  )
-                                }
-                                className={
-                                  "cursor-pointer " +
-                                  (selectedIsin === h.isin ? "bg-muted/60" : "")
-                                }
-                              >
-                                <TableCell
-                                  className="max-w-[140px] sm:max-w-[280px] truncate"
-                                  title={h.product}
-                                >
-                                  {h.product}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  {privacy ? "•••" : fmtEur(h.valueEur)}
-                                </TableCell>
-                                <TableCell
-                                  className={
-                                    "text-right tabular-nums " +
-                                    (h.returnEur >= 0
-                                      ? "text-emerald-500"
-                                      : "text-red-500")
-                                  }
-                                >
-                                  {privacy
-                                    ? "•••"
-                                    : `${h.returnEur >= 0 ? "+" : ""}${fmtEur(h.returnEur)}`}
-                                </TableCell>
-                                <TableCell
-                                  className={
-                                    "text-right tabular-nums " +
-                                    (h.returnPct >= 0
-                                      ? "text-emerald-500"
-                                      : "text-red-500")
-                                  }
-                                >
-                                  {h.returnPct >= 0 ? "+" : ""}
-                                  {(h.returnPct * 100).toLocaleString("nl-NL", {
-                                    minimumFractionDigits: 1,
-                                    maximumFractionDigits: 1,
-                                  })}
-                                  %
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums text-muted-foreground">
-                                  {privacy ? "•••" : fmtEur(h.investedEur)}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
-                                </TableCell>
-                                <TableCell className="font-mono text-xs">
-                                  {h.ticker ?? "—"}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </>
-                  )}
+                  <HoldingsTab
+                    hasValuation={valuation.length > 0}
+                    rows={sortedHoldings}
+                    privacy={privacy}
+                    query={holdingsQuery}
+                    onQueryChange={setHoldingsQuery}
+                    range={range}
+                    onRangeChange={setRange}
+                    customRange={customRange}
+                    onCustomRangeChange={setCustomRange}
+                    earliestDate={earliestDate}
+                    latestDate={latest?.date ?? today()}
+                    sort={sort}
+                    onToggleSort={toggleSort}
+                    selectedIsin={selectedIsin}
+                    onSelectIsin={setSelectedIsin}
+                  />
                 </TabsContent>
 
                 <TabsContent value="stoploss" className="mt-4 space-y-3">
-                  {valuation.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Click "Compute portfolio" to see stop-loss suggestions.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="flex flex-wrap items-end gap-4">
-                        <div>
-                          <label className="text-xs text-muted-foreground block mb-1">
-                            Min return %
-                          </label>
-                          <Input
-                            type="number"
-                            min={0}
-                            step={5}
-                            value={stopLossMinReturnPct}
-                            onChange={(e) =>
-                              setStopLossMinReturnPct(Math.max(0, Number(e.target.value) || 0))
-                            }
-                            className="w-24"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs text-muted-foreground block mb-1">
-                            Method
-                          </label>
-                          <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
-                            {(["pct", "atr"] as const).map((m) => (
-                              <button
-                                key={m}
-                                onClick={() => setStopLossMethod(m)}
-                                className={
-                                  "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
-                                  (stopLossMethod === m
-                                    ? "bg-background text-foreground shadow-sm"
-                                    : "text-muted-foreground hover:text-foreground")
-                                }
-                              >
-                                {m === "pct" ? "Fixed %" : "ATR"}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {stopLossMethod === "pct" ? (
-                          <div>
-                            <label className="text-xs text-muted-foreground block mb-1">
-                              Trailing stop %
-                            </label>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={50}
-                              step={1}
-                              value={stopLossPct}
-                              onChange={(e) =>
-                                setStopLossPct(
-                                  Math.min(50, Math.max(1, Number(e.target.value) || 1)),
-                                )
-                              }
-                              className="w-24"
-                            />
-                          </div>
-                        ) : (
-                          <div>
-                            <label className="text-xs text-muted-foreground block mb-1">
-                              ATR × multiplier
-                            </label>
-                            <Input
-                              type="number"
-                              min={0.5}
-                              max={10}
-                              step={0.5}
-                              value={atrMultiplier}
-                              onChange={(e) =>
-                                setAtrMultiplier(
-                                  Math.min(10, Math.max(0.5, Number(e.target.value) || 0.5)),
-                                )
-                              }
-                              className="w-24"
-                            />
-                          </div>
-                        )}
-                        <div>
-                          <label className="text-xs text-muted-foreground block mb-1">
-                            Currency
-                          </label>
-                          <div className="inline-flex items-center rounded-lg border bg-muted/40 p-0.5">
-                            {(["native", "eur"] as const).map((c) => (
-                              <button
-                                key={c}
-                                onClick={() => setStopLossCcy(c)}
-                                className={
-                                  "px-3 py-1 rounded-md text-sm font-medium transition-colors " +
-                                  (stopLossCcy === c
-                                    ? "bg-background text-foreground shadow-sm"
-                                    : "text-muted-foreground hover:text-foreground")
-                                }
-                              >
-                                {c === "native" ? "Ticker" : "EUR"}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground max-w-md">
-                          Showing positions up {stopLossMinReturnPct}% or more.
-                          {stopLossMethod === "pct"
-                            ? ` Stop loss is ${stopLossPct}% below the current price.`
-                            : ` Stop loss is ${atrMultiplier}× ATR(14) below the current price — adapts to each stock's volatility (typical multipliers: 2–3).`}
-                        </p>
-                      </div>
-                      {stopLossCcy === "native" &&
-                        Object.keys(nativePrices).length === 0 && (
-                          <p className="text-sm text-amber-500">
-                            Native ticker prices not loaded yet — click "Compute
-                            portfolio" to refresh, or switch to EUR.
-                          </p>
-                        )}
-                      {stopLossRows.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          No open positions with return ≥ {stopLossMinReturnPct}%.
-                        </p>
-                      ) : (
-                        <div className="overflow-x-auto">
-                          <Table className="text-[13px]">
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Stock</TableHead>
-                                <TableHead className="text-right">Qty</TableHead>
-                                <TableHead className="text-right">Price</TableHead>
-                                <TableHead className="text-right">Return %</TableHead>
-                                <TableHead className="text-right">Stop loss</TableHead>
-                                <TableHead className="text-right">Drop</TableHead>
-                                <TableHead className="text-right">Locked-in return</TableHead>
-                                <TableHead>Ticker</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {stopLossRows.map((r) => (
-                                <TableRow key={r.isin}>
-                                  <TableCell
-                                    className="max-w-[140px] sm:max-w-[280px] truncate"
-                                    title={r.product}
-                                  >
-                                    {r.product}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {privacy ? "•••" : fmtNum(r.quantity, 0)}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {privacy
-                                      ? "•••"
-                                      : stopLossCcy === "native" && r.nativePrice != null
-                                        ? `${fmtNum(r.nativePrice, 2)} ${r.nativeCurrency}`
-                                        : `${fmtNum(r.pricePerShareEur, 2)} EUR`}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums text-emerald-500">
-                                    +
-                                    {(r.returnPct * 100).toLocaleString("nl-NL", {
-                                      minimumFractionDigits: 1,
-                                      maximumFractionDigits: 1,
-                                    })}
-                                    %
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums font-medium">
-                                    {privacy
-                                      ? "•••"
-                                      : stopLossCcy === "native" && r.nativeStopPrice != null
-                                        ? `${fmtNum(r.nativeStopPrice, 2)} ${r.nativeCurrency}`
-                                        : `${fmtNum(r.stopPricePerShareEur, 2)} EUR`}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                                    -
-                                    {(r.dropFrac * 100).toLocaleString("nl-NL", {
-                                      minimumFractionDigits: 1,
-                                      maximumFractionDigits: 1,
-                                    })}
-                                    %
-                                    {stopLossMethod === "atr" && !r.usingAtr && (
-                                      <span
-                                        className="text-amber-500 ml-1"
-                                        title="No ATR data — using fixed % fallback"
-                                      >
-                                        *
-                                      </span>
-                                    )}
-                                  </TableCell>
-                                  <TableCell
-                                    className={
-                                      "text-right tabular-nums " +
-                                      (r.lockedReturnPct >= 0
-                                        ? "text-emerald-500"
-                                        : "text-red-500")
-                                    }
-                                  >
-                                    {r.lockedReturnPct >= 0 ? "+" : ""}
-                                    {(r.lockedReturnPct * 100).toLocaleString("nl-NL", {
-                                      minimumFractionDigits: 1,
-                                      maximumFractionDigits: 1,
-                                    })}
-                                    %
-                                    {!privacy && (
-                                      <span className="text-xs text-muted-foreground ml-1">
-                                        ({r.lockedReturnEur >= 0 ? "+" : ""}
-                                        {fmtEur(r.lockedReturnEur)})
-                                      </span>
-                                    )}
-                                  </TableCell>
-                                  <TableCell className="font-mono text-xs">
-                                    {r.ticker ?? "—"}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      )}
-                    </>
-                  )}
+                  <StopLossTab
+                    hasValuation={valuation.length > 0}
+                    rows={stopLossRows}
+                    privacy={privacy}
+                    hasNativePrices={Object.keys(nativePrices).length > 0}
+                    minReturnPct={stopLossMinReturnPct}
+                    onMinReturnPctChange={setStopLossMinReturnPct}
+                    method={stopLossMethod}
+                    onMethodChange={setStopLossMethod}
+                    pct={stopLossPct}
+                    onPctChange={setStopLossPct}
+                    atrMultiplier={atrMultiplier}
+                    onAtrMultiplierChange={setAtrMultiplier}
+                    ccy={stopLossCcy}
+                    onCcyChange={setStopLossCcy}
+                  />
                 </TabsContent>
 
                 <TabsContent value="currency" className="mt-4 space-y-3">
-                  {valuation.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Click "Compute portfolio" to see currency exposure.
-                    </p>
-                  ) : currencyExposure.rows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      No open positions.
-                    </p>
-                  ) : (
-                    <>
-                      <p className="text-xs text-muted-foreground max-w-md">
-                        How your open positions break down by listing currency
-                        — anything outside EUR is FX risk.
-                      </p>
-                      <div className="overflow-x-auto">
-                        <Table className="text-[13px]">
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Currency</TableHead>
-                              <TableHead className="text-right">Value (€)</TableHead>
-                              <TableHead className="text-right">Share</TableHead>
-                              <TableHead>{""}</TableHead>
-                              <TableHead className="text-right">Positions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {currencyExposure.rows.map((r) => (
-                              <TableRow key={r.currency}>
-                                <TableCell className="font-mono text-xs">
-                                  {r.currency}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  {privacy ? "•••" : fmtEur(r.valueEur)}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  {(r.pct * 100).toLocaleString("nl-NL", {
-                                    minimumFractionDigits: 1,
-                                    maximumFractionDigits: 1,
-                                  })}
-                                  %
-                                </TableCell>
-                                <TableCell className="w-[180px]">
-                                  <div className="h-2 w-full rounded bg-muted overflow-hidden">
-                                    <div
-                                      className={
-                                        "h-full " +
-                                        (r.currency === "EUR"
-                                          ? "bg-emerald-500/70"
-                                          : "bg-sky-500/70")
-                                      }
-                                      style={{ width: `${r.pct * 100}%` }}
-                                    />
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums text-muted-foreground">
-                                  {r.positions}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </>
-                  )}
+                  <CurrencyTab
+                    hasValuation={valuation.length > 0}
+                    rows={currencyExposure.rows}
+                    privacy={privacy}
+                  />
                 </TabsContent>
 
                 <TabsContent value="tickers" className="mt-4 space-y-3">
-                  {tickers.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      Click "Compute portfolio" to resolve tickers.
-                    </p>
-                  ) : (
-                    <>
-                      <Input
-                        type="search"
-                        placeholder="Filter by ISIN, name, ticker or exchange…"
-                        value={tickersQuery}
-                        onChange={(e) => setTickersQuery(e.target.value)}
-                        className="md:hidden"
-                      />
-                      {unresolved.length > 0 && (
-                        <p className="text-sm text-destructive">
-                          Unresolved ISINs (excluded from valuation):{" "}
-                          {unresolved.map((u) => u.isin).join(", ")}
-                        </p>
-                      )}
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>ISIN</TableHead>
-                              <TableHead>Name</TableHead>
-                              <TableHead>Yahoo ticker</TableHead>
-                              <TableHead>Exchange</TableHead>
-                              <TableHead>Source</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {filteredTickers.map((t) => (
-                              <TableRow key={t.isin}>
-                                <TableCell className="font-mono text-xs">
-                                  {t.isin}
-                                </TableCell>
-                                <TableCell
-                                  className="max-w-[280px] truncate"
-                                  title={t.name ?? ""}
-                                >
-                                  {t.name ?? "—"}
-                                </TableCell>
-                                <TableCell className="font-mono">
-                                  {t.ticker ?? "—"}
-                                </TableCell>
-                                <TableCell>{t.exchange ?? "—"}</TableCell>
-                                <TableCell className="text-muted-foreground">
-                                  {t.source}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </>
-                  )}
+                  <TickersTab
+                    tickers={tickers}
+                    unresolved={unresolved}
+                    filtered={filteredTickers}
+                    query={tickersQuery}
+                    onQueryChange={setTickersQuery}
+                  />
                 </TabsContent>
 
                 <TabsContent value="transactions" className="mt-4 space-y-3">
-                  <Input
-                    type="search"
-                    placeholder="Filter by date, product, ISIN or currency…"
-                    value={txQuery}
-                    onChange={(e) => setTxQuery(e.target.value)}
-                    className="md:hidden"
+                  <TransactionsTab
+                    filtered={filteredTransactions}
+                    query={txQuery}
+                    onQueryChange={setTxQuery}
                   />
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Product</TableHead>
-                          <TableHead>ISIN</TableHead>
-                          <TableHead className="text-right">Qty</TableHead>
-                          <TableHead className="text-right">Price</TableHead>
-                          <TableHead>Ccy</TableHead>
-                          <TableHead className="text-right">Total EUR</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredTransactions
-                          .slice()
-                          .reverse()
-                          .map((t, i) => (
-                            <TableRow key={`${t.orderId}-${i}`}>
-                              <TableCell className="whitespace-nowrap">
-                                {t.date}
-                              </TableCell>
-                              <TableCell
-                                className="max-w-[280px] truncate"
-                                title={t.product}
-                              >
-                                {t.product}
-                              </TableCell>
-                              <TableCell className="font-mono text-xs">
-                                {t.isin}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {fmtNum(t.quantity, 0)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {fmtNum(t.price, 4)}
-                              </TableCell>
-                              <TableCell>{t.currency}</TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {fmtNum(t.totalEur)}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                      </TableBody>
-                    </Table>
-                  </div>
                 </TabsContent>
               </Tabs>
             </CardContent>
           </Card>
         )}
 
-        {stats && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Summary</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Transactions</dt>
-                  <dd className="text-lg font-medium">{stats.count}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Unique ISINs</dt>
-                  <dd className="text-lg font-medium">{stats.isins}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Buys / Sells</dt>
-                  <dd className="text-lg font-medium">
-                    {stats.buys} / {stats.sells}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">First trade</dt>
-                  <dd className="text-lg font-medium">{stats.first}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Last trade</dt>
-                  <dd className="text-lg font-medium">{stats.last}</dd>
-                </div>
-              </dl>
-            </CardContent>
-          </Card>
-        )}
+        {stats && <SummaryCard {...stats} />}
       </div>
     </div>
   );
