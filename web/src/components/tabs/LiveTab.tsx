@@ -205,6 +205,12 @@ export function LiveTab({ hasValuation, lifetimeHoldings, privacy }: Props) {
               <SortableTh sortKey="product" sort={sort} onToggle={toggleSort}>
                 Stock
               </SortableTh>
+              <SortableTh sortKey="change" sort={sort} onToggle={toggleSort} align="right">
+                {lookbackLabel}
+              </SortableTh>
+              <SortableTh sortKey="changePct" sort={sort} onToggle={toggleSort} align="right">
+                {lookbackLabel} %
+              </SortableTh>
               <SortableTh sortKey="quantity" sort={sort} onToggle={toggleSort} align="right">
                 Qty
               </SortableTh>
@@ -213,12 +219,6 @@ export function LiveTab({ hasValuation, lifetimeHoldings, privacy }: Props) {
               </SortableTh>
               <SortableTh sortKey="previousClose" sort={sort} onToggle={toggleSort} align="right">
                 {lookbackDays === 1 ? "Prev close" : `${lookbackDays}D ago`}
-              </SortableTh>
-              <SortableTh sortKey="change" sort={sort} onToggle={toggleSort} align="right">
-                {lookbackLabel}
-              </SortableTh>
-              <SortableTh sortKey="changePct" sort={sort} onToggle={toggleSort} align="right">
-                {lookbackLabel} %
               </SortableTh>
               <TableHead>Market</TableHead>
               <SortableTh sortKey="ticker" sort={sort} onToggle={toggleSort}>
@@ -234,17 +234,6 @@ export function LiveTab({ hasValuation, lifetimeHoldings, privacy }: Props) {
                   title={h.product}
                 >
                   {h.product}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-medium">
-                  {price != null
-                    ? `${fmtNum(price, 2)} ${q?.currency ?? ""}`
-                    : "—"}
-                </TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {previousClose != null ? fmtNum(previousClose, 2) : "—"}
                 </TableCell>
                 <TableCell
                   className={
@@ -276,6 +265,17 @@ export function LiveTab({ hasValuation, lifetimeHoldings, privacy }: Props) {
                         maximumFractionDigits: 2,
                       })}%`
                     : "—"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {privacy ? "•••" : fmtNum(h.quantity, 0)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums font-medium">
+                  {price != null
+                    ? `${fmtNum(price, 2)} ${q?.currency ?? ""}`
+                    : "—"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {previousClose != null ? fmtNum(previousClose, 2) : "—"}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   {q?.marketState ?? "—"}
